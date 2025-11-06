@@ -1,0 +1,392 @@
+#!/usr/bin/env python3
+"""
+Filter - Analyse complète avec nouvelle stratégie de trading
+"""
+
+import sqlite3
+import time
+import os
+import sys
+import json
+import logging
+import re
+from datetime import datetime, timedelta
+from typing import Dict, Tuple, Optional, Set, List
+from pathlib import Path
+
+PROJECT_DIR = Path(__file__).parent.parent
+sys.path.append(str(PROJECT_DIR))
+
+from dotenv import load_dotenv
+from web3_utils import (
+    BaseWeb3Manager, UniswapV3Manager,
+    DexScreenerAPI, BaseScanAPI, CoinGeckoAPI
+)
+
+load_dotenv(PROJECT_DIR / 'config' / '.env')
+
+class AdvancedFilter:
+    def __init__(self):
+        # Créer les dossiers nécessaires
+        (PROJECT_DIR / 'data').mkdir(parents=True, exist_ok=True)
+        (PROJECT_DIR / 'logs').mkdir(parents=True, exist_ok=True)
+        (PROJECT_DIR / 'config').mkdir(parents=True, exist_ok=True)
+        self.db_path = PROJECT_DIR / 'data' / 'trading.db'
+
+        # Setup logging
+        self.setup_logging()
+
+        # Initialiser la base de données si nécessaire
+        self.init_database()
+
+        # Charger la configuration
+        self.load_config()
+
+        # Initialiser les clients API
+        self.web3_manager = BaseWeb3Manager(
+            rpc_url=os.getenv('RPC_URL', 'https://mainnet.base.org'),
+            private_key=os.getenv('PRIVATE_KEY')
+        )
+        self.uniswap = UniswapV3Manager(self.web3_manager)
+        self.dexscreener = DexScreenerAPI()
+        self.basescan = BaseScanAPI(os.getenv('ETHERSCAN_API_KEY')) # Utilise la clé Etherscan
+        self.coingecko = CoinGeckoAPI(os.getenv('COINGECKO_API_KEY'))
+
+        # Système de blacklist
+        self.blacklist_file = PROJECT_DIR / 'config' / 'blacklist.json'
+        self.load_blacklist()
+
+        # Statistiques de filtrage
+        self.stats = {
+            'total_analyzed': 0,
+            'total_approved': 0,
+            'total_rejected': 0
+        }
+
+    def setup_logging(self):
+        """Configuration du logging"""
+        log_file = PROJECT_DIR / 'logs' / 'filter.log'
+        log_file.parent.mkdir(parents=True, exist_ok=True)
+        logging.basicConfig(
+            level=logging.INFO,
+            format='%(asctime)s - %(levelname)s - %(message)s',
+            handlers=[
+                logging.FileHandler(log_file),
+                logging.StreamHandler(sys.stdout)
+            ]
+        )
+        self.logger = logging.getLogger(__name__)
+
+    def init_database(self):
+        """Initialise la base de données si nécessaire"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Table des tokens approuvés
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS approved_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT UNIQUE NOT NULL,
+                symbol TEXT,
+                name TEXT,
+                reason TEXT, -- Raison de l'approbation
+                score REAL,  -- Score de qualité (0-100)
+                analysis_data TEXT, -- JSON avec les détails de l'analyse
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Table des tokens rejetés
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS rejected_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT UNIQUE NOT NULL,
+                symbol TEXT,
+                name TEXT,
+                reason TEXT, -- Raison du rejet
+                analysis_data TEXT, -- JSON avec les détails de l'analyse
+                rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        # Table des règles de filtrage (optionnel, pour suivi)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS filter_rules (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                rule_name TEXT UNIQUE NOT NULL,
+                rule_config TEXT, -- JSON avec la configuration de la règle
+                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
+        conn.commit()
+        conn.close()
+
+    def load_config(self):
+        """Charge la configuration avec nouvelle stratégie"""
+        # Mode de trading
+        mode_file = PROJECT_DIR / 'config' / 'trading_mode.json'
+        try:
+            if mode_file.exists():
+                with open(mode_file, 'r') as f:
+                    data = json.load(f)
+                self.trading_mode = data.get('mode', 'paper')
+            else:
+                self.trading_mode = 'paper'
+                with open(mode_file, 'w') as f:
+                    json.dump({'mode': 'paper'}, f)
+        except Exception as e:
+            self.logger.error(f"Erreur chargement mode trading: {e}")
+            self.trading_mode = 'paper' # Valeur par défaut
+
+        # Règles de filtrage
+        try:
+            # Exemple de règles - à adapter selon votre stratégie
+            self.min_market_cap = float(os.getenv('FILTER_MIN_MC', '1000')) # 1000 USD
+            self.max_market_cap = float(os.getenv('FILTER_MAX_MC', '500000')) # 500k USD
+            self.min_liquidity = float(os.getenv('FILTER_MIN_LIQUIDITY', '500')) # 500 USD
+            self.max_age_days = int(os.getenv('FILTER_MAX_AGE_DAYS', '30')) # 30 jours
+            self.min_holders = int(os.getenv('FILTER_MIN_HOLDERS', '100')) # 100 holders
+            self.max_owner_percentage = float(os.getenv('FILTER_MAX_OWNER_PCT', '10.0')) # 10%
+            self.max_tax = float(os.getenv('FILTER_MAX_TAX', '10.0')) # 10%
+            self.score_threshold = float(os.getenv('FILTER_SCORE_THRESHOLD', '70.0')) # 70/100
+        except ValueError as e:
+            self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut.")
+            # Définir des valeurs par défaut si le parsing échoue
+            self.min_market_cap = 1000
+            self.max_market_cap = 500000
+            self.min_liquidity = 500
+            self.max_age_days = 30
+            self.min_holders = 100
+            self.max_owner_percentage = 10.0
+            self.max_tax = 10.0
+            self.score_threshold = 70.0
+
+
+    def load_blacklist(self):
+        """Charge la liste noire depuis le fichier JSON"""
+        try:
+            if self.blacklist_file.exists():
+                with open(self.blacklist_file, 'r') as f:
+                    self.blacklist = set(json.load(f))
+            else:
+                self.blacklist = set()
+                # Créer un fichier vide si nécessaire
+                with open(self.blacklist_file, 'w') as f:
+                    json.dump([], f)
+        except Exception as e:
+            self.logger.error(f"Erreur chargement blacklist: {e}")
+            self.blacklist = set()
+
+    def is_blacklisted(self, token_address: str) -> bool:
+        """Vérifie si un token est sur la liste noire"""
+        return token_address.lower() in [addr.lower() for addr in self.blacklist]
+
+    def calculate_score(self, token_data: Dict) -> Tuple[float, List[str]]:
+        """
+        Calcule un score de qualité basé sur les critères de filtrage.
+        Retourne (score, liste_raisons_positive)
+        """
+        score = 0.0
+        reasons = []
+
+        # Vérifier la blacklist
+        if self.is_blacklisted(token_data['token_address']):
+            return 0.0, ["Blacklisted"]
+
+        # --- Critères d'analyse ---
+        # Market Cap
+        mc = token_data.get('market_cap', 0)
+        if self.min_market_cap <= mc <= self.max_market_cap:
+            score += 20
+            reasons.append(f"MC (${mc:,.2f}) OK")
+        elif mc < self.min_market_cap:
+            reasons.append(f"MC (${mc:,.2f}) < min (${self.min_market_cap:,.2f})")
+        else:
+            reasons.append(f"MC (${mc:,.2f}) > max (${self.max_market_cap:,.2f})")
+
+        # Liquidity
+        liquidity = token_data.get('liquidity', 0)
+        if liquidity >= self.min_liquidity:
+            score += 15
+            reasons.append(f"Liquidity (${liquidity:,.2f}) OK")
+        else:
+            reasons.append(f"Liquidity (${liquidity:,.2f}) < min (${self.min_liquidity:,.2f})")
+
+        # Age (si disponible)
+        created_at = token_data.get('created_at')
+        if created_at:
+            try:
+                from datetime import timezone
+                token_creation_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                age_days = (datetime.now(timezone.utc) - token_creation_date).days
+                if age_days <= self.max_age_days:
+                    score += 10
+                    reasons.append(f"Age ({age_days}d) OK")
+                else:
+                    reasons.append(f"Age ({age_days}d) > max ({self.max_age_days}d)")
+            except:
+                reasons.append("Age non vérifié (format date)")
+
+        # Holders (si disponible via BaseScan ou autre)
+        holders = token_data.get('holder_count', 0) # Cette donnée doit être récupérée ailleurs
+        if holders >= self.min_holders:
+            score += 10
+            reasons.append(f"Holders ({holders}) OK")
+        else:
+            reasons.append(f"Holders ({holders}) < min ({self.min_holders})")
+
+        # Owner percentage (si disponible via BaseScan)
+        owner_pct = token_data.get('owner_percentage', 100.0) # Cette donnée doit être récupérée ailleurs
+        if owner_pct <= self.max_owner_percentage:
+            score += 15
+            reasons.append(f"Owner % ({owner_pct:.2f}%) OK")
+        else:
+            reasons.append(f"Owner % ({owner_pct:.2f}%) > max ({self.max_owner_percentage:.2f}%)")
+
+        # Taxes (si disponibles via BaseScan ou analyse du contrat)
+        buy_tax = token_data.get('buy_tax', 0.0) # Cette donnée doit être récupérée ailleurs
+        sell_tax = token_data.get('sell_tax', 0.0) # Cette donnée doit être récupérée ailleurs
+        if buy_tax <= self.max_tax and sell_tax <= self.max_tax:
+            score += 15
+            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) OK")
+        else:
+            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max ({self.max_tax:.2f}%)")
+
+        # Données on-chain (détails du contrat, honeypot, etc.) - via web3_utils
+        try:
+            token_address = token_data['token_address']
+            honeypot_check = self.web3_manager.check_honeypot(token_address)
+            if not honeypot_check.get('is_honeypot', True): # Si ce n'est PAS un honeypot
+                score += 15
+                reasons.append("Passed honeypot check")
+            else:
+                reasons.append("Failed honeypot check")
+        except Exception as e:
+            self.logger.warning(f"Erreur check honeypot pour {token_data['token_address']}: {e}")
+            reasons.append("Honeypot check failed")
+
+        # Limiter le score à 100
+        score = min(score, 100.0)
+
+        return score, reasons
+
+    def approve_token(self, token_data: Dict, score: float, reasons: List[str]):
+        """Enregistre un token comme approuvé"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        analysis_json = json.dumps({
+            'score': score,
+            'reasons': reasons,
+            'details': token_data # Inclure les détails bruts pour référence
+        })
+
+        cursor.execute('''
+            INSERT OR REPLACE INTO approved_tokens
+            (token_address, symbol, name, reason, score, analysis_data)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            token_data['token_address'],
+            token_data['symbol'],
+            token_data['name'],
+            f"Score: {score:.2f} - {', '.join(reasons)}",
+            score,
+            analysis_json
+        ))
+
+        conn.commit()
+        conn.close()
+        self.stats['total_approved'] += 1
+        self.logger.info(f"✅ Token APPROUVE: {token_data['symbol']} ({token_data['token_address']}) - Score: {score:.2f}")
+
+    def reject_token(self, token_data: Dict, reasons: List[str]):
+        """Enregistre un token comme rejeté"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        analysis_json = json.dumps({
+            'reasons': reasons,
+            'details': token_data
+        })
+
+        cursor.execute('''
+            INSERT OR REPLACE INTO rejected_tokens
+            (token_address, symbol, name, reason, analysis_data)
+            VALUES (?, ?, ?, ?, ?)
+        ''', (
+            token_data['token_address'],
+            token_data['symbol'],
+            token_data['name'],
+            ', '.join(reasons),
+            analysis_json
+        ))
+
+        conn.commit()
+        conn.close()
+        self.stats['total_rejected'] += 1
+        self.logger.info(f"❌ Token REJETE: {token_data['symbol']} ({token_data['token_address']}) - Raisons: {', '.join(reasons)}")
+
+    def run_filter_cycle(self):
+        """Exécute un cycle de filtrage : récupère les tokens découverts, les analyse, les approuve/rejette"""
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        # Récupérer les tokens découverts non encore filtrés (ni approuvés ni rejetés)
+        cursor.execute('''
+            SELECT * FROM discovered_tokens
+            WHERE token_address NOT IN (SELECT token_address FROM approved_tokens)
+            AND token_address NOT IN (SELECT token_address FROM rejected_tokens)
+        ''')
+        new_tokens = cursor.fetchall()
+
+        # Récupérer les noms des colonnes pour reconstruire les dictionnaires
+        col_names = [description[0] for description in cursor.description]
+
+        for row in new_tokens:
+            token_dict = dict(zip(col_names, row))
+            self.stats['total_analyzed'] += 1
+
+            self.logger.info(f"Analyse du token: {token_dict['symbol']} ({token_dict['token_address']})")
+
+            # Calculer le score
+            score, reasons = self.calculate_score(token_dict)
+
+            if score >= self.score_threshold:
+                self.approve_token(token_dict, score, reasons)
+            else:
+                self.reject_token(token_dict, reasons)
+
+        conn.close()
+
+    def run(self):
+        """Boucle principale du filtre"""
+        self.logger.info("Filter démarré...")
+        self.logger.info(f"Mode: {self.trading_mode}")
+        self.logger.info(f"Seuil de score: {self.score_threshold}")
+
+        while True:
+            try:
+                self.logger.info("Démarrage d'un cycle de filtrage...")
+                self.run_filter_cycle()
+                self.logger.info(f"Cycle terminé. Stats: Analyzed={self.stats['total_analyzed']}, Approved={self.stats['total_approved']}, Rejected={self.stats['total_rejected']}")
+
+                # Attendre avant le prochain cycle (ex: 5 minutes)
+                time.sleep(300)
+
+            except KeyboardInterrupt:
+                self.logger.info("Filter arrêté par l'utilisateur.")
+                break
+            except Exception as e:
+                self.logger.error(f"Erreur dans la boucle principale du filter: {e}")
+                time.sleep(10)  # Attendre avant de réessayer
+
+if __name__ == "__main__":
+    filter_bot = AdvancedFilter()
+    try:
+        filter_bot.run()
+    except KeyboardInterrupt:
+        print("\nFilter arrêté.")
+    except Exception as e:
+        print(f"Erreur fatale: {e}")
+
