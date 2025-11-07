@@ -502,13 +502,28 @@ chmod +x "$BOT_DIR/config_manager" 2>/dev/null || true
 print_success "Scripts configurés"
 
 # =============================================================================
-# 7. Nettoyage et préparation des fichiers de logs
+# 7. Initialisation de la base de données
 # =============================================================================
 
-print_header "7️⃣  Nettoyage des fichiers de logs"
+print_header "7️⃣  Initialisation de la base de données"
+
+if [ -f "$BOT_DIR/src/init_database.py" ]; then
+    print_step "Création de la base de données..."
+    su - $BOT_USER -c "source $VENV_DIR/bin/activate && cd $BOT_DIR && python src/init_database.py" >> "$LOG_FILE" 2>&1 || true
+    print_success "Base de données initialisée"
+else
+    print_warning "Script init_database.py non trouvé"
+fi
+
+# =============================================================================
+# 8. Nettoyage et préparation des fichiers de logs
+# =============================================================================
+
+print_header "8️⃣  Nettoyage des fichiers de logs"
 
 print_step "Suppression des anciens fichiers de logs (si existants)..."
 # Supprimer les anciens fichiers de logs pour éviter les problèmes de permissions
+# IMPORTANT: Faire APRÈS init_database.py qui peut créer des logs
 rm -f "$BOT_DIR/logs/"*.log 2>/dev/null || true
 print_success "Anciens logs supprimés"
 
@@ -518,20 +533,6 @@ chown -R $BOT_USER:$BOT_USER "$BOT_DIR"
 # Permissions spécifiques pour le répertoire logs
 chmod 755 "$BOT_DIR/logs"
 print_success "Permissions configurées"
-
-# =============================================================================
-# 8. Initialisation de la base de données
-# =============================================================================
-
-print_header "8️⃣  Initialisation de la base de données"
-
-if [ -f "$BOT_DIR/src/init_database.py" ]; then
-    print_step "Création de la base de données..."
-    su - $BOT_USER -c "source $VENV_DIR/bin/activate && cd $BOT_DIR && python src/init_database.py" >> "$LOG_FILE" 2>&1 || true
-    print_success "Base de données initialisée"
-else
-    print_warning "Script init_database.py non trouvé"
-fi
 
 # =============================================================================
 # 9. Configuration des services systemd
