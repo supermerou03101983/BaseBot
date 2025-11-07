@@ -502,10 +502,28 @@ chmod +x "$BOT_DIR/config_manager" 2>/dev/null || true
 print_success "Scripts configurés"
 
 # =============================================================================
-# 7. Initialisation de la base de données
+# 7. Nettoyage et préparation des fichiers de logs
 # =============================================================================
 
-print_header "7️⃣  Initialisation de la base de données"
+print_header "7️⃣  Nettoyage des fichiers de logs"
+
+print_step "Suppression des anciens fichiers de logs (si existants)..."
+# Supprimer les anciens fichiers de logs pour éviter les problèmes de permissions
+rm -f "$BOT_DIR/logs/"*.log 2>/dev/null || true
+print_success "Anciens logs supprimés"
+
+print_step "Vérification finale des permissions..."
+# S'assurer que tous les fichiers appartiennent à basebot
+chown -R $BOT_USER:$BOT_USER "$BOT_DIR"
+# Permissions spécifiques pour le répertoire logs
+chmod 755 "$BOT_DIR/logs"
+print_success "Permissions configurées"
+
+# =============================================================================
+# 8. Initialisation de la base de données
+# =============================================================================
+
+print_header "8️⃣  Initialisation de la base de données"
 
 if [ -f "$BOT_DIR/src/init_database.py" ]; then
     print_step "Création de la base de données..."
@@ -516,10 +534,10 @@ else
 fi
 
 # =============================================================================
-# 8. Configuration des services systemd
+# 9. Configuration des services systemd
 # =============================================================================
 
-print_header "8️⃣  Configuration des services systemd"
+print_header "9️⃣  Configuration des services systemd"
 
 # Service Scanner
 print_step "Création du service Scanner..."
@@ -615,10 +633,10 @@ print_success "Services systemd créés"
 log "Services systemd configurés"
 
 # =============================================================================
-# 9. Configuration du pare-feu (optionnel)
+# 10. Configuration du pare-feu (optionnel)
 # =============================================================================
 
-print_header "9️⃣  Configuration du pare-feu"
+print_header "🔟 Configuration du pare-feu"
 
 if command -v ufw &> /dev/null; then
     print_step "Configuration UFW..."
@@ -634,10 +652,10 @@ else
 fi
 
 # =============================================================================
-# 10. Tests de validation
+# 11. Tests de validation
 # =============================================================================
 
-print_header "🔟 Tests de validation"
+print_header "1️⃣1️⃣ Tests de validation"
 
 print_step "Vérification de l'installation Python..."
 su - $BOT_USER -c "source $VENV_DIR/bin/activate && python -c 'import web3, pandas, streamlit; print(\"✓ Modules OK\")'" >> "$LOG_FILE" 2>&1
