@@ -202,7 +202,7 @@ class EnhancedScanner:
                     continue  # Passer si déjà enregistré
 
                 # Récupérer les détails on-chain via web3_utils
-                token_details = self.web3_manager.get_token_details(token_address)
+                token_details = self.web3_manager.get_token_info(token_address)
                 if not token_details:
                     continue
 
