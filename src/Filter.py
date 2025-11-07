@@ -82,6 +82,23 @@ class AdvancedFilter:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        # Table des tokens découverts (partagée avec Scanner)
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS discovered_tokens (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                token_address TEXT UNIQUE NOT NULL,
+                symbol TEXT,
+                name TEXT,
+                decimals INTEGER,
+                total_supply TEXT,
+                liquidity REAL,
+                market_cap REAL,
+                price_usd REAL,
+                price_eth REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        ''')
+
         # Table des tokens approuvés
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS approved_tokens (
@@ -332,32 +349,45 @@ class AdvancedFilter:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Récupérer les tokens découverts non encore filtrés (ni approuvés ni rejetés)
-        cursor.execute('''
-            SELECT * FROM discovered_tokens
-            WHERE token_address NOT IN (SELECT token_address FROM approved_tokens)
-            AND token_address NOT IN (SELECT token_address FROM rejected_tokens)
-        ''')
-        new_tokens = cursor.fetchall()
+        try:
+            # Récupérer les tokens découverts non encore filtrés (ni approuvés ni rejetés)
+            cursor.execute('''
+                SELECT * FROM discovered_tokens
+                WHERE token_address NOT IN (SELECT token_address FROM approved_tokens)
+                AND token_address NOT IN (SELECT token_address FROM rejected_tokens)
+            ''')
+            new_tokens = cursor.fetchall()
 
-        # Récupérer les noms des colonnes pour reconstruire les dictionnaires
-        col_names = [description[0] for description in cursor.description]
+            if not new_tokens:
+                self.logger.info("Aucun nouveau token à filtrer pour le moment")
+                conn.close()
+                return
 
-        for row in new_tokens:
-            token_dict = dict(zip(col_names, row))
-            self.stats['total_analyzed'] += 1
+            # Récupérer les noms des colonnes pour reconstruire les dictionnaires
+            col_names = [description[0] for description in cursor.description]
 
-            self.logger.info(f"Analyse du token: {token_dict['symbol']} ({token_dict['token_address']})")
+            self.logger.info(f"{len(new_tokens)} nouveau(x) token(s) à analyser")
 
-            # Calculer le score
-            score, reasons = self.calculate_score(token_dict)
+            for row in new_tokens:
+                token_dict = dict(zip(col_names, row))
+                self.stats['total_analyzed'] += 1
 
-            if score >= self.score_threshold:
-                self.approve_token(token_dict, score, reasons)
-            else:
-                self.reject_token(token_dict, reasons)
+                self.logger.info(f"Analyse du token: {token_dict.get('symbol', 'N/A')} ({token_dict['token_address']})")
 
-        conn.close()
+                # Calculer le score
+                score, reasons = self.calculate_score(token_dict)
+
+                if score >= self.score_threshold:
+                    self.approve_token(token_dict, score, reasons)
+                else:
+                    self.reject_token(token_dict, reasons)
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors du cycle de filtrage: {e}")
+            import traceback
+            self.logger.error(traceback.format_exc())
+        finally:
+            conn.close()
 
     def run(self):
         """Boucle principale du filtre"""

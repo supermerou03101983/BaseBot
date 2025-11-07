@@ -268,15 +268,14 @@ class RealTrader:
             
             # Recuperer depuis approved_tokens avec le schema valide
             cursor.execute("""
-                SELECT at.address, at.symbol, at.name, at.decimals,
-                       at.liquidity_usd, at.volume_24h, at.holders, at.risk_score,
-                       dt.price_usd
+                SELECT at.token_address, at.symbol, at.name, at.score,
+                       dt.liquidity, dt.market_cap, dt.price_usd
                 FROM approved_tokens at
-                LEFT JOIN discovered_tokens dt ON at.address = dt.address
-                WHERE at.address NOT IN (
+                LEFT JOIN discovered_tokens dt ON at.token_address = dt.token_address
+                WHERE at.token_address NOT IN (
                     SELECT token_address FROM trade_history WHERE exit_time IS NULL
                 )
-                ORDER BY at.risk_score ASC, at.approved_at DESC
+                ORDER BY at.score DESC, at.created_at DESC
                 LIMIT 1
             """)
             

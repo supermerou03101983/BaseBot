@@ -51,7 +51,7 @@ class EnhancedScanner:
             raise
 
         self.batch_size = 50  # Tokens à scanner par batch
-        self.scan_delay = 1   # Délai entre les batches (secondes)
+        self.scan_delay = int(os.getenv('SCAN_INTERVAL_SECONDS', 30))  # Délai entre les scans (secondes)
 
     def setup_logging(self):
         """Configuration du logging"""
@@ -121,51 +121,64 @@ class EnhancedScanner:
 
     async def fetch_new_tokens(self) -> List[Dict]:
         """
-        Récupère les nouveaux tokens.
-        Ici, nous simulons la découverte en récupérant les derniers tokens ajoutés à discovered_tokens.
-        Dans une implémentation réelle, vous devriez utiliser une source externe ou une recherche active.
+        Récupère les nouveaux tokens depuis DexScreener.
+        Utilise l'API pour obtenir les paires récentes sur Base Network.
+        """
+        try:
+            # Récupérer les paires récentes depuis DexScreener
+            self.logger.info("Récupération des nouveaux tokens depuis DexScreener...")
+            new_pairs = self.dexscreener.get_recent_pairs_on_chain('base', limit=20)
+
+            if not new_pairs:
+                self.logger.warning("Aucune nouvelle paire trouvée sur DexScreener")
+                # Fallback: vérifier les tokens existants en DB
+                return await self._fetch_tokens_from_db()
+
+            self.logger.info(f"{len(new_pairs)} paires trouvées sur DexScreener")
+            return new_pairs
+
+        except Exception as e:
+            self.logger.error(f"Erreur lors de la récupération des nouveaux tokens: {e}")
+            # Fallback sur la DB en cas d'erreur
+            return await self._fetch_tokens_from_db()
+
+    async def _fetch_tokens_from_db(self) -> List[Dict]:
+        """
+        Fallback: récupère les tokens depuis la DB pour réanalyse
         """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
-            # Récupérer les tokens récemment ajoutés (dernières 24h par exemple)
-            # ou simplement les derniers X tokens ajoutés
-            # On récupère les derniers tokens découverts pour les "réanalyser"
             cursor.execute('''
                 SELECT token_address, symbol, name, created_at FROM discovered_tokens
                 ORDER BY created_at DESC
-                LIMIT 10 -- Limite pour ne pas surcharger
+                LIMIT 10
             ''')
             rows = cursor.fetchall()
             col_names = [description[0] for description in cursor.description]
             recent_tokens = [dict(zip(col_names, row)) for row in rows]
 
-            # OU : Simuler la découverte de nouveaux tokens (ex: tokens connus pour test)
-            # new_tokens_simulated = [
-            #     {"tokenAddress": "0x0000000000000000000000000000000000000000", "symbol": "WETH", "name": "Wrapped Ether"},
-            #     # Ajouter d'autres tokens de test si nécessaire
-            # ]
-            # return new_tokens_simulated
-
-            # Pour l'instant, retournons les tokens récemment découverts pour réanalyse
-            # On convertit le format pour correspondre à ce que process_token_batch attend
+            # Convertir au format attendu
             formatted_tokens = []
             for token_row in recent_tokens:
-                 # On récupère les détails complets via DexScreener
-                 token_info = self.dexscreener.get_token_info(token_row['token_address'])
-                 if token_info:
-                     formatted_tokens.append({
-                         'tokenAddress': token_row['token_address'],
-                         'baseToken': {'address': token_row['token_address'], 'symbol': token_row['symbol'], 'name': token_row['name']},
-                         'priceUsd': token_info.get('price_usd', 0),
-                         'liquidity': {'usd': token_info.get('liquidity_usd', 0)},
-                         'marketCap': token_info.get('market_cap', 0)
-                     })
+                token_info = self.dexscreener.get_token_info(token_row['token_address'])
+                if token_info:
+                    formatted_tokens.append({
+                        'tokenAddress': token_row['token_address'],
+                        'baseToken': {
+                            'address': token_row['token_address'],
+                            'symbol': token_row['symbol'],
+                            'name': token_row['name']
+                        },
+                        'priceUsd': token_info.get('price_usd', 0),
+                        'liquidity': {'usd': token_info.get('liquidity_usd', 0)},
+                        'marketCap': token_info.get('market_cap', 0)
+                    })
 
             return formatted_tokens
 
         except Exception as e:
-            self.logger.error(f"Erreur lors de la récupération des tokens récents de la DB: {e}")
+            self.logger.error(f"Erreur lors de la récupération des tokens de la DB: {e}")
             return []
         finally:
             conn.close()

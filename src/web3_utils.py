@@ -278,6 +278,58 @@ class DexScreenerAPI:
             print(f"Erreur DexScreener API: {e}")
             return None
             
+    def get_recent_pairs_on_chain(self, chain_id: str = 'base', limit: int = 50) -> list:
+        """
+        Recupere les paires recentes sur une blockchain donnee
+
+        Args:
+            chain_id: ID de la blockchain (ex: 'base', 'ethereum')
+            limit: Nombre maximum de paires a retourner
+
+        Returns:
+            Liste de paires avec leurs donnees
+        """
+        try:
+            # DexScreener n'a pas d'endpoint direct pour les paires recentes par chain
+            # On utilise l'endpoint search avec des criteres larges
+            url = f"{self.base_url}/search?q={chain_id}"
+            response = self.session.get(url, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+                pairs = data.get('pairs', [])
+
+                # Filtrer par chainId et trier par creation recente
+                filtered_pairs = [
+                    p for p in pairs
+                    if p.get('chainId', '').lower() == chain_id.lower()
+                ]
+
+                # Trier par volume 24h (proxy pour les paires actives/recentes)
+                filtered_pairs = sorted(
+                    filtered_pairs,
+                    key=lambda x: float(x.get('volume', {}).get('h24', 0)),
+                    reverse=True
+                )
+
+                # Formater les paires
+                result = []
+                for pair in filtered_pairs[:limit]:
+                    parsed = self._parse_pair_data(pair)
+                    if parsed:
+                        # Ajouter les infos du token de base
+                        parsed['tokenAddress'] = pair.get('baseToken', {}).get('address')
+                        parsed['baseToken'] = pair.get('baseToken', {})
+                        parsed['quoteToken'] = pair.get('quoteToken', {})
+                        result.append(parsed)
+
+                return result
+            return []
+
+        except Exception as e:
+            print(f"Erreur get_recent_pairs_on_chain: {e}")
+            return []
+
     def _parse_pair_data(self, pair: Dict) -> Dict:
         """Parse les donnees d'une paire avec validation"""
         try:
@@ -289,7 +341,7 @@ class DexScreenerAPI:
                 'volume_1h': float(pair.get('volume', {}).get('h1', 0)),
                 'price_change_1h': float(pair.get('priceChange', {}).get('h1', 0)),
                 'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0)),
-                'txns_24h': (pair.get('txns', {}).get('h24', {}).get('buys', 0) + 
+                'txns_24h': (pair.get('txns', {}).get('h24', {}).get('buys', 0) +
                            pair.get('txns', {}).get('h24', {}).get('sells', 0)),
                 'fdv': float(pair.get('fdv', 0)),
                 'market_cap': float(pair.get('marketCap', 0)),

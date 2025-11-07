@@ -39,25 +39,20 @@ def init_database():
         VALUES (1, 0)
     ''')
     
-    # Table discovered_tokens
+    # Table discovered_tokens (schéma aligné avec Scanner.py et Filter.py)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS discovered_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            address TEXT UNIQUE NOT NULL,
+            token_address TEXT UNIQUE NOT NULL,
             symbol TEXT,
             name TEXT,
             decimals INTEGER,
             total_supply TEXT,
-            dex TEXT,
-            pair_address TEXT,
-            pair_token TEXT,
-            block_number INTEGER,
-            timestamp INTEGER,
-            liquidity_usd REAL DEFAULT 0,
-            volume_24h REAL DEFAULT 0,
+            liquidity REAL DEFAULT 0,
+            market_cap REAL DEFAULT 0,
             price_usd REAL DEFAULT 0,
-            status TEXT DEFAULT 'pending',
-            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            price_eth REAL DEFAULT 0,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -65,25 +60,25 @@ def init_database():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS approved_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            address TEXT UNIQUE NOT NULL,
+            token_address TEXT UNIQUE NOT NULL,
             symbol TEXT,
             name TEXT,
-            decimals INTEGER,
-            liquidity_usd REAL,
-            volume_24h REAL,
-            holders INTEGER,
-            risk_score REAL,
-            approved_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            reason TEXT,
+            score REAL,
+            analysis_data TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
-    # Table rejected_tokens
+    # Table rejected_tokens (schéma aligné avec filter.py)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rejected_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            address TEXT UNIQUE NOT NULL,
+            token_address TEXT UNIQUE NOT NULL,
             symbol TEXT,
+            name TEXT,
             reason TEXT,
+            analysis_data TEXT,
             rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -100,6 +95,8 @@ def init_database():
             price REAL,
             gas_used REAL,
             profit_loss REAL,
+            entry_time TIMESTAMP,
+            exit_time TIMESTAMP,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -180,11 +177,10 @@ def init_database():
         )
     
     # Index pour performance optimale
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_status ON discovered_tokens(status)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_address ON discovered_tokens(address)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_timestamp ON discovered_tokens(timestamp DESC)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_approved_address ON approved_tokens(address)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_rejected_address ON rejected_tokens(address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_address ON discovered_tokens(token_address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_created ON discovered_tokens(created_at DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_approved_address ON approved_tokens(token_address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_rejected_address ON rejected_tokens(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_token ON trade_history(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_time ON trade_history(timestamp DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_log_time ON trade_log(timestamp DESC)')
