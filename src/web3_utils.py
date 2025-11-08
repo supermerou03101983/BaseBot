@@ -365,33 +365,10 @@ class DexScreenerAPI:
             ]
             print(f"🔗 Après filtrage chainId '{chain_id}': {len(filtered_pairs)} paires")
 
-            # Optionnel: filtrer par âge pour garder seulement les jeunes tokens
-            from datetime import datetime
-            now = datetime.now()
-            recent_pairs = []
-
-            skipped_too_old = 0
-            skipped_no_date = 0
-
-            for p in filtered_pairs:
-                # pairCreatedAt est en timestamp milliseconds
-                created_at = p.get('pairCreatedAt')
-                if created_at:
-                    created_time = datetime.fromtimestamp(created_at / 1000)
-                    age_hours = (now - created_time).total_seconds() / 3600
-                    # Garder les tokens de moins de 7 jours pour avoir un bon pool de candidats
-                    # Le Filter appliquera ensuite MIN_AGE_HOURS=2 pour sélectionner les meilleurs
-                    if age_hours < 168:  # 7 jours = 168 heures
-                        recent_pairs.append(p)
-                    else:
-                        skipped_too_old += 1
-                else:
-                    # Si pas de date, on garde quand même (sera filtré plus tard)
-                    recent_pairs.append(p)
-                    skipped_no_date += 1
-
-            filtered_pairs = recent_pairs
-            print(f"⏰ Après filtrage âge < 7j: {len(filtered_pairs)} paires gardées | {skipped_too_old} trop vieilles | {skipped_no_date} sans date")
+            # On ne filtre PAS par âge ici - on laisse le Filter gérer avec MIN_AGE_HOURS
+            # DexScreener /search retourne des tokens populaires/actifs, pas forcément récents
+            # Le Filter appliquera les critères stricts: âge, liquidité, volume, holders, etc.
+            print(f"✅ {len(filtered_pairs)} paires Base passées au Scanner (aucun filtre d'âge appliqué)")
 
             # Formater les paires
             result = []
