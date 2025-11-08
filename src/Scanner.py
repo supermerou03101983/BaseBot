@@ -189,21 +189,29 @@ class EnhancedScanner:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
+        skipped_existing = 0
+        skipped_no_address = 0
+        skipped_no_details = 0
+        added = 0
+
         for token_data in tokens:
             try:
                 # Extraire les données du token
                 token_address = token_data.get('tokenAddress') or token_data.get('baseToken', {}).get('address')
                 if not token_address:
+                    skipped_no_address += 1
                     continue  # Passer si pas d'adresse
 
                 # Vérifier si le token existe déjà
                 cursor.execute("SELECT 1 FROM discovered_tokens WHERE token_address = ?", (token_address,))
                 if cursor.fetchone():
+                    skipped_existing += 1
                     continue  # Passer si déjà enregistré
 
                 # Récupérer les détails on-chain via web3_utils
                 token_details = self.web3_manager.get_token_info(token_address)
                 if not token_details:
+                    skipped_no_details += 1
                     continue
 
                 # Récupérer les données de DexScreener
@@ -226,13 +234,17 @@ class EnhancedScanner:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, price_usd, price_eth))
 
-                self.logger.info(f"Token découvert: {symbol} ({token_address}) - MC: ${market_cap:.2f}")
+                self.logger.info(f"✅ Token découvert: {symbol} ({token_address}) - MC: ${market_cap:.2f}")
+                added += 1
 
             except Exception as e:
                 self.logger.error(f"Erreur lors du traitement du token {token_data.get('tokenAddress', 'N/A')}: {e}")
 
         conn.commit()
         conn.close()
+
+        # Log récapitulatif
+        self.logger.info(f"📊 Batch traité: {added} nouveaux | {skipped_existing} déjà connus | {skipped_no_address} sans adresse | {skipped_no_details} sans détails")
 
     async def run(self):
         """Boucle principale du scanner"""
