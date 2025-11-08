@@ -552,6 +552,7 @@ Type=simple
 User=$BOT_USER
 WorkingDirectory=$BOT_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStartPre=/bin/sh -c 'rm -f $BOT_DIR/logs/scanner*.log || true'
 ExecStart=$VENV_DIR/bin/python $BOT_DIR/src/Scanner.py
 Restart=always
 RestartSec=10
@@ -574,6 +575,7 @@ Type=simple
 User=$BOT_USER
 WorkingDirectory=$BOT_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStartPre=/bin/sh -c 'rm -f $BOT_DIR/logs/filter*.log || true'
 ExecStart=$VENV_DIR/bin/python $BOT_DIR/src/Filter.py
 Restart=always
 RestartSec=10
@@ -596,6 +598,7 @@ Type=simple
 User=$BOT_USER
 WorkingDirectory=$BOT_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStartPre=/bin/sh -c 'rm -f $BOT_DIR/logs/trader*.log || true'
 ExecStart=$VENV_DIR/bin/python $BOT_DIR/src/Trader.py
 Restart=always
 RestartSec=10
@@ -618,6 +621,7 @@ Type=simple
 User=$BOT_USER
 WorkingDirectory=$BOT_DIR
 Environment="PATH=$VENV_DIR/bin:/usr/local/bin:/usr/bin:/bin"
+ExecStartPre=/bin/sh -c 'rm -f $BOT_DIR/logs/dashboard*.log || true'
 ExecStart=$VENV_DIR/bin/streamlit run $BOT_DIR/src/Dashboard.py --server.port 8501 --server.address 0.0.0.0
 Restart=always
 RestartSec=10
