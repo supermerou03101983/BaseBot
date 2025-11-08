@@ -346,33 +346,42 @@ class DexScreenerAPI:
         try:
             # Essayer l'endpoint /latest/dex/tokens pour les NOUVEAUX tokens (< 48h)
             url = f"{self.base_url}/latest/dex/tokens/{chain_id}"
+            print(f"🔍 Tentative endpoint: {url}")
             response = self.session.get(url, timeout=10)
+            print(f"📡 Status code /latest: {response.status_code}")
 
             pairs = []
             if response.status_code == 200:
                 data = response.json()
                 pairs = data.get('pairs', [])
+                print(f"📊 /latest a retourné {len(pairs)} paires brutes")
 
             # Fallback: si /latest ne retourne rien, utiliser l'endpoint search
             if not pairs:
                 print(f"⚠️ Endpoint /latest ne retourne rien, fallback vers /search")
                 url = f"{self.base_url}/search?q={chain_id}"
                 response = self.session.get(url, timeout=10)
+                print(f"📡 Status code /search: {response.status_code}")
 
                 if response.status_code == 200:
                     data = response.json()
                     pairs = data.get('pairs', [])
+                    print(f"📊 /search a retourné {len(pairs)} paires brutes")
 
             # Filtrer par chainId
             filtered_pairs = [
                 p for p in pairs
                 if p.get('chainId', '').lower() == chain_id.lower()
             ]
+            print(f"🔗 Après filtrage chainId '{chain_id}': {len(filtered_pairs)} paires")
 
             # Optionnel: filtrer par âge pour garder seulement les jeunes tokens
             from datetime import datetime
             now = datetime.now()
             recent_pairs = []
+
+            skipped_too_old = 0
+            skipped_no_date = 0
 
             for p in filtered_pairs:
                 # pairCreatedAt est en timestamp milliseconds
@@ -383,12 +392,15 @@ class DexScreenerAPI:
                     # Garder les tokens de moins de 48h (le Filter appliquera MIN_AGE_HOURS=2)
                     if age_hours < 48:
                         recent_pairs.append(p)
+                    else:
+                        skipped_too_old += 1
                 else:
                     # Si pas de date, on garde quand même (sera filtré plus tard)
                     recent_pairs.append(p)
+                    skipped_no_date += 1
 
             filtered_pairs = recent_pairs
-            print(f"DexScreener: {len(filtered_pairs)} paires récentes (< 48h) trouvées sur {chain_id}")
+            print(f"⏰ Après filtrage âge < 48h: {len(filtered_pairs)} paires gardées | {skipped_too_old} trop vieilles | {skipped_no_date} sans date")
 
             # Formater les paires
             result = []
@@ -401,6 +413,7 @@ class DexScreenerAPI:
                     parsed['quoteToken'] = pair.get('quoteToken', {})
                     result.append(parsed)
 
+            print(f"✅ {len(result)} paires formatées et retournées")
             return result
 
         except Exception as e:
