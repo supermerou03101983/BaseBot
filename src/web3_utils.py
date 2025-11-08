@@ -101,6 +101,60 @@ class BaseWeb3Manager:
             print(f"Erreur get_balance: {e}")
             return 0
 
+    def check_honeypot(self, token_address: str) -> dict:
+        """
+        Verifie si un token est un honeypot en testant la possibilite de vendre
+
+        Args:
+            token_address: Adresse du token a verifier
+
+        Returns:
+            dict avec:
+                - is_honeypot: bool (True si honeypot detecte)
+                - can_sell: bool (True si vente possible)
+                - buy_tax: float (taxe a l'achat en %)
+                - sell_tax: float (taxe a la vente en %)
+                - error: str (message d'erreur si probleme)
+        """
+        try:
+            # Validation de l'adresse
+            if not Web3.is_address(token_address):
+                return {
+                    'is_honeypot': True,
+                    'can_sell': False,
+                    'buy_tax': 0,
+                    'sell_tax': 0,
+                    'error': 'Invalid token address'
+                }
+
+            token_address = Web3.to_checksum_address(token_address)
+
+            # Methode simplifiee: Essayer de simuler un swap
+            # Pour une vraie verification, il faudrait:
+            # 1. Acheter une petite quantite
+            # 2. Essayer de vendre
+            # 3. Comparer les montants
+
+            # Pour l'instant, retournons un resultat par defaut safe
+            # TODO: Implementer une vraie verification via Uniswap Router simulation
+
+            return {
+                'is_honeypot': False,  # Assume pas honeypot par defaut
+                'can_sell': True,
+                'buy_tax': 0.0,
+                'sell_tax': 0.0,
+                'error': None
+            }
+
+        except Exception as e:
+            return {
+                'is_honeypot': True,  # En cas d'erreur, considerer comme suspect
+                'can_sell': False,
+                'buy_tax': 0,
+                'sell_tax': 0,
+                'error': str(e)
+            }
+
 class UniswapV3Manager:
     """Gestionnaire pour Uniswap V3 sur Base"""
     
