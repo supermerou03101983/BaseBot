@@ -199,28 +199,26 @@ with tab2:
 
 with tab3:
     st.header("Tokens Approuvés en Attente")
-    
+
     approved_df = pd.read_sql_query("""
-        SELECT 
+        SELECT
+            at.token_address,
             at.symbol,
-            at.liquidity_usd,
-            at.volume_24h,
-            at.holders,
-            at.risk_score,
-            at.approved_at
+            at.name,
+            at.score,
+            at.created_at
         FROM approved_tokens at
-        WHERE at.address NOT IN (
+        WHERE at.token_address NOT IN (
             SELECT DISTINCT token_address FROM trade_history WHERE side = 'BUY'
         )
-        ORDER BY at.risk_score ASC, at.approved_at DESC
+        ORDER BY at.score DESC, at.created_at DESC
         LIMIT 20
     """, conn)
     
     if not approved_df.empty:
         # Formater l'affichage
-        approved_df['liquidity_usd'] = approved_df['liquidity_usd'].apply(lambda x: f"${x:,.0f}")
-        approved_df['volume_24h'] = approved_df['volume_24h'].apply(lambda x: f"${x:,.0f}")
-        approved_df.columns = ['Symbol', 'Liquidité', 'Volume 24h', 'Holders', 'Score Risque', 'Approuvé']
+        approved_df['score'] = approved_df['score'].apply(lambda x: f"{x:.1f}")
+        approved_df.columns = ['Adresse', 'Symbol', 'Nom', 'Score', 'Approuvé le']
         st.dataframe(approved_df, use_container_width=True)
     else:
         st.info("Aucun token en attente")
