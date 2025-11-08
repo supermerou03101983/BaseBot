@@ -125,9 +125,9 @@ class EnhancedScanner:
         Utilise l'API pour obtenir les paires récentes sur Base Network.
         """
         try:
-            # Récupérer les paires récentes depuis DexScreener
+            # Récupérer les paires récentes depuis DexScreener (jeunes tokens < 48h)
             self.logger.info("Récupération des nouveaux tokens depuis DexScreener...")
-            new_pairs = self.dexscreener.get_recent_pairs_on_chain('base', limit=20)
+            new_pairs = self.dexscreener.get_recent_pairs_on_chain('base', limit=50)
 
             if not new_pairs:
                 self.logger.warning("Aucune nouvelle paire trouvée sur DexScreener")

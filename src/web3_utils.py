@@ -344,27 +344,41 @@ class DexScreenerAPI:
             Liste de paires avec leurs donnees
         """
         try:
-            # DexScreener n'a pas d'endpoint direct pour les paires recentes par chain
-            # On utilise l'endpoint search avec des criteres larges
-            url = f"{self.base_url}/search?q={chain_id}"
+            # Utiliser l'endpoint /latest/dex/tokens pour les NOUVEAUX tokens (< 48h)
+            url = f"{self.base_url}/latest/dex/tokens/{chain_id}"
             response = self.session.get(url, timeout=10)
 
             if response.status_code == 200:
                 data = response.json()
                 pairs = data.get('pairs', [])
 
-                # Filtrer par chainId et trier par creation recente
+                # Les paires sont déjà triées par date de création (plus récentes en premier)
+                # Filtrer uniquement par chainId
                 filtered_pairs = [
                     p for p in pairs
                     if p.get('chainId', '').lower() == chain_id.lower()
                 ]
 
-                # Trier par volume 24h (proxy pour les paires actives/recentes)
-                filtered_pairs = sorted(
-                    filtered_pairs,
-                    key=lambda x: float(x.get('volume', {}).get('h24', 0)),
-                    reverse=True
-                )
+                # Optionnel: filtrer par âge pour garder seulement les jeunes tokens
+                from datetime import datetime
+                now = datetime.now()
+                recent_pairs = []
+
+                for p in filtered_pairs:
+                    # pairCreatedAt est en timestamp milliseconds
+                    created_at = p.get('pairCreatedAt')
+                    if created_at:
+                        created_time = datetime.fromtimestamp(created_at / 1000)
+                        age_hours = (now - created_time).total_seconds() / 3600
+                        # Garder les tokens de moins de 48h (le Filter appliquera MIN_AGE_HOURS=2)
+                        if age_hours < 48:
+                            recent_pairs.append(p)
+                    else:
+                        # Si pas de date, on garde quand même (sera filtré plus tard)
+                        recent_pairs.append(p)
+
+                filtered_pairs = recent_pairs
+                print(f"DexScreener: {len(filtered_pairs)} paires récentes (< 48h) trouvées sur {chain_id}")
 
                 # Formater les paires
                 result = []
