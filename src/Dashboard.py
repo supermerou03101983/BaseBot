@@ -72,11 +72,11 @@ with st.sidebar:
         st.warning("⚠️ Mode RÉEL (Production)")
     
     # Rafraîchissement auto
-    auto_refresh = st.checkbox("Rafraîchissement auto (5s)", value=True)
-    
+    auto_refresh = st.checkbox("Rafraîchissement auto (60s)", value=False)
+
     if auto_refresh:
-        time.sleep(5)
-        st.rerun()
+        time.sleep(60)
+        st.experimental_rerun()
 
 # Métriques principales
 col1, col2, col3, col4 = st.columns(4)
