@@ -71,12 +71,23 @@ with st.sidebar:
     else:
         st.warning("⚠️ Mode RÉEL (Production)")
     
-    # Rafraîchissement auto
-    auto_refresh = st.checkbox("Rafraîchissement auto (60s)", value=False)
+    # Rafraîchissement auto avec intervalle configurable
+    auto_refresh = st.checkbox("Rafraîchissement auto", value=False)
 
     if auto_refresh:
-        time.sleep(60)
-        st.experimental_rerun()
+        refresh_interval = st.selectbox(
+            "Intervalle de rafraîchissement",
+            options=[30, 60, 120, 300],
+            format_func=lambda x: f"{x} secondes",
+            index=1  # 60 secondes par défaut
+        )
+        # Utiliser st.empty pour créer un placeholder
+        placeholder = st.empty()
+        with placeholder:
+            st.info(f"🔄 Prochain rafraîchissement dans {refresh_interval} secondes...")
+        time.sleep(refresh_interval)
+        placeholder.empty()
+        st.rerun()
 
 # Métriques principales
 col1, col2, col3, col4 = st.columns(4)
