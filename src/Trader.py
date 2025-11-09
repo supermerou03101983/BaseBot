@@ -269,7 +269,7 @@ class RealTrader:
             # Recuperer depuis approved_tokens avec le schema valide
             cursor.execute("""
                 SELECT at.token_address, at.symbol, at.name, at.score,
-                       dt.liquidity, dt.market_cap, dt.price_usd
+                       dt.liquidity, dt.market_cap, dt.price_usd, dt.volume_24h
                 FROM approved_tokens at
                 LEFT JOIN discovered_tokens dt ON at.token_address = dt.token_address
                 WHERE at.token_address NOT IN (
@@ -278,10 +278,10 @@ class RealTrader:
                 ORDER BY at.score DESC, at.created_at DESC
                 LIMIT 1
             """)
-            
+
             row = cursor.fetchone()
             conn.close()
-            
+
             if row:
                 return {
                     'address': row[0],           # token_address
@@ -290,7 +290,8 @@ class RealTrader:
                     'score': row[3],             # score
                     'liquidity': row[4] or 0,    # liquidity depuis discovered_tokens
                     'market_cap': row[5] or 0,   # market_cap depuis discovered_tokens
-                    'price_usd': row[6] or 0     # price_usd depuis discovered_tokens
+                    'price_usd': row[6] or 0,    # price_usd depuis discovered_tokens
+                    'volume_24h': row[7] or 0    # volume_24h depuis discovered_tokens
                 }
             return None
         except Exception as e:
