@@ -158,25 +158,34 @@ class AdvancedFilter:
 
         # Règles de filtrage
         try:
-            # Exemple de règles - à adapter selon votre stratégie
-            self.min_market_cap = float(os.getenv('FILTER_MIN_MC', '1000')) # 1000 USD
-            self.max_market_cap = float(os.getenv('FILTER_MAX_MC', '500000')) # 500k USD
-            self.min_liquidity = float(os.getenv('FILTER_MIN_LIQUIDITY', '500')) # 500 USD
-            self.max_age_days = int(os.getenv('FILTER_MAX_AGE_DAYS', '30')) # 30 jours
-            self.min_holders = int(os.getenv('FILTER_MIN_HOLDERS', '100')) # 100 holders
-            self.max_owner_percentage = float(os.getenv('FILTER_MAX_OWNER_PCT', '10.0')) # 10%
-            self.max_tax = float(os.getenv('FILTER_MAX_TAX', '10.0')) # 10%
-            self.score_threshold = float(os.getenv('FILTER_SCORE_THRESHOLD', '70.0')) # 70/100
+            # Utiliser les variables standardisées du .env
+            self.min_market_cap = float(os.getenv('MIN_MARKET_CAP', '25000'))
+            self.max_market_cap = float(os.getenv('MAX_MARKET_CAP', '10000000'))
+            self.min_liquidity = float(os.getenv('MIN_LIQUIDITY_USD', '30000'))
+            self.max_liquidity = float(os.getenv('MAX_LIQUIDITY_USD', '10000000'))
+            self.min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '50000'))
+            self.min_age_hours = float(os.getenv('MIN_AGE_HOURS', '2'))
+            self.min_holders = int(os.getenv('MIN_HOLDERS', '150'))
+            self.max_owner_percentage = float(os.getenv('MAX_OWNER_PERCENTAGE', '10.0'))
+            self.max_buy_tax = float(os.getenv('MAX_BUY_TAX', '5.0'))
+            self.max_sell_tax = float(os.getenv('MAX_SELL_TAX', '5.0'))
+            self.min_safety_score = float(os.getenv('MIN_SAFETY_SCORE', '70.0'))
+            self.min_potential_score = float(os.getenv('MIN_POTENTIAL_SCORE', '60.0'))
         except ValueError as e:
             self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut.")
             # Définir des valeurs par défaut si le parsing échoue
-            self.min_market_cap = 1000
-            self.max_market_cap = 500000
-            self.min_liquidity = 500
-            self.max_age_days = 30
-            self.min_holders = 100
+            self.min_market_cap = 25000
+            self.max_market_cap = 10000000
+            self.min_liquidity = 30000
+            self.max_liquidity = 10000000
+            self.min_volume_24h = 50000
+            self.min_age_hours = 2
+            self.min_holders = 150
             self.max_owner_percentage = 10.0
-            self.max_tax = 10.0
+            self.max_buy_tax = 5.0
+            self.max_sell_tax = 5.0
+            self.min_safety_score = 70.0
+            self.min_potential_score = 60.0
             self.score_threshold = 70.0
 
 
@@ -230,20 +239,29 @@ class AdvancedFilter:
         else:
             reasons.append(f"Liquidity (${liquidity:,.2f}) < min (${self.min_liquidity:,.2f})")
 
-        # Age (si disponible)
+        # Age (si disponible) - Doit avoir AU MOINS min_age_hours
         created_at = token_data.get('created_at')
         if created_at:
             try:
                 from datetime import timezone
-                token_creation_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
-                age_days = (datetime.now(timezone.utc) - token_creation_date).days
-                if age_days <= self.max_age_days:
-                    score += 10
-                    reasons.append(f"Age ({age_days}d) OK")
+                # Parser le format "2025-11-09 11:51:36"
+                if 'T' in created_at:
+                    # Format ISO avec T
+                    token_creation_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
                 else:
-                    reasons.append(f"Age ({age_days}d) > max ({self.max_age_days}d)")
-            except:
-                reasons.append("Age non vérifié (format date)")
+                    # Format "YYYY-MM-DD HH:MM:SS"
+                    token_creation_date = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+                    token_creation_date = token_creation_date.replace(tzinfo=timezone.utc)
+
+                age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
+
+                if age_hours >= self.min_age_hours:
+                    score += 10
+                    reasons.append(f"Age ({age_hours:.1f}h) >= min ({self.min_age_hours}h)")
+                else:
+                    reasons.append(f"Age ({age_hours:.1f}h) < min ({self.min_age_hours}h)")
+            except Exception as e:
+                reasons.append(f"Age non vérifié (erreur: {str(e)[:50]})")
 
         # Holders (si disponible via BaseScan ou autre)
         holders = token_data.get('holder_count', 0) # Cette donnée doit être récupérée ailleurs
