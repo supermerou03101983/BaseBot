@@ -659,19 +659,27 @@ class GeckoTerminalAPI:
             attributes = pool.get('attributes', {})
             relationships = pool.get('relationships', {})
 
-            # Debug: afficher les clés disponibles pour le premier pool
+            # Debug: afficher les clés relationships pour le premier pool
             if not hasattr(self, '_debug_done'):
-                print(f"🔍 Debug GeckoTerminal - Clés attributes: {list(attributes.keys())[:10]}")
+                print(f"🔍 Debug GeckoTerminal - Clés relationships: {list(relationships.keys())}")
+                # Afficher la structure du base_token si présent
+                if 'base_token' in relationships:
+                    base_token_data = relationships['base_token']
+                    print(f"🔍 Structure base_token: {base_token_data}")
                 self._debug_done = True
 
-            # Extraction des tokens
-            base_token = attributes.get('base_token_price_usd')
-            quote_token = attributes.get('quote_token_price_usd')
+            # Extraire l'adresse du token depuis relationships.base_token.data.id
+            # Format GeckoTerminal: relationships -> base_token -> data -> id = "base_0xADDRESS"
+            token_address = None
+            if 'base_token' in relationships:
+                base_token_rel = relationships['base_token']
+                if isinstance(base_token_rel, dict) and 'data' in base_token_rel:
+                    token_id = base_token_rel['data'].get('id', '')
+                    # token_id format: "base_0x..." -> extraire 0x...
+                    if '_0x' in token_id:
+                        token_address = '0x' + token_id.split('_0x')[1]
 
-            # Adresse du token de base
-            token_address = attributes.get('base_token_address')
             if not token_address:
-                print(f"⚠️ Pool sans base_token_address, clés: {list(attributes.keys())}")
                 return None
 
             # Calcul market cap approximatif (si disponible)
@@ -697,6 +705,20 @@ class GeckoTerminalAPI:
                 except:
                     pass
 
+            # Extraire quote_token address aussi
+            quote_token_address = None
+            if 'quote_token' in relationships:
+                quote_token_rel = relationships['quote_token']
+                if isinstance(quote_token_rel, dict) and 'data' in quote_token_rel:
+                    token_id = quote_token_rel['data'].get('id', '')
+                    if '_0x' in token_id:
+                        quote_token_address = '0x' + token_id.split('_0x')[1]
+
+            # Extraire les symboles depuis le nom (ex: "DEGEN/WETH")
+            pool_name = attributes.get('name', '')
+            base_symbol = pool_name.split('/')[0].strip() if '/' in pool_name else ''
+            quote_symbol = pool_name.split('/')[1].strip() if '/' in pool_name else ''
+
             return {
                 'tokenAddress': token_address,
                 'price_usd': price_usd,
@@ -709,14 +731,14 @@ class GeckoTerminalAPI:
                 'chain_id': 'base',
                 'pairCreatedAt': pair_created_at,
                 'baseToken': {
-                    'address': attributes.get('base_token_address'),
-                    'name': attributes.get('name', '').split('/')[0].strip() if '/' in attributes.get('name', '') else '',
-                    'symbol': attributes.get('name', '').split('/')[0].strip() if '/' in attributes.get('name', '') else ''
+                    'address': token_address,
+                    'name': base_symbol,
+                    'symbol': base_symbol
                 },
                 'quoteToken': {
-                    'address': attributes.get('quote_token_address'),
-                    'name': attributes.get('name', '').split('/')[1].strip() if '/' in attributes.get('name', '') else '',
-                    'symbol': attributes.get('name', '').split('/')[1].strip() if '/' in attributes.get('name', '') else ''
+                    'address': quote_token_address,
+                    'name': quote_symbol,
+                    'symbol': quote_symbol
                 },
                 'price_change_1h': float(attributes.get('price_change_percentage', {}).get('h1', 0)),
                 'price_change_24h': float(attributes.get('price_change_percentage', {}).get('h24', 0)),
