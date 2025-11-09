@@ -578,3 +578,141 @@ class CoinGeckoAPI:
             print(f"Erreur get_eth_price: {e}")
             with self._cache_lock:
                 return self._eth_price_cache.get('price', 3000)  # Retourner la derniere valeur connue
+
+class GeckoTerminalAPI:
+    """Client pour l'API GeckoTerminal avec retry"""
+
+    def __init__(self):
+        self.base_url = "https://api.geckoterminal.com/api/v2"
+        self.session = self._create_session()
+
+    def _create_session(self) -> requests.Session:
+        """Cree une session avec retry automatique"""
+        session = requests.Session()
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
+    def close(self) -> None:
+        """Ferme la session HTTP"""
+        if self.session:
+            self.session.close()
+
+    def get_new_pools(self, network: str = 'base', page: int = 1) -> list:
+        """
+        Recupere les nouveaux pools sur un reseau specifique
+
+        Args:
+            network: Nom du reseau (ex: 'base', 'ethereum', 'bsc')
+            page: Numero de page (1-10 pour free tier)
+
+        Returns:
+            Liste de pools avec leurs donnees
+        """
+        try:
+            url = f"{self.base_url}/networks/{network}/new_pools"
+            params = {'page': page}
+
+            print(f"🔍 GeckoTerminal: {url} (page {page})")
+            response = self.session.get(url, params=params, timeout=10)
+            print(f"📡 Status code: {response.status_code}")
+
+            if response.status_code == 200:
+                data = response.json()
+                pools = data.get('data', [])
+                print(f"📊 GeckoTerminal a retourné {len(pools)} nouveaux pools")
+
+                # Formater les pools pour compatibilité avec notre système
+                result = []
+                for pool in pools:
+                    formatted = self._format_pool_data(pool)
+                    if formatted:
+                        result.append(formatted)
+
+                return result
+            return []
+        except Exception as e:
+            print(f"Erreur GeckoTerminal get_new_pools: {e}")
+            return []
+
+    def _format_pool_data(self, pool: dict) -> Optional[Dict]:
+        """
+        Formate les donnees d'un pool GeckoTerminal pour compatibilite avec DexScreener
+
+        Args:
+            pool: Donnees brutes du pool depuis GeckoTerminal
+
+        Returns:
+            Dict formate compatible avec le format DexScreener
+        """
+        try:
+            attributes = pool.get('attributes', {})
+            relationships = pool.get('relationships', {})
+
+            # Extraction des tokens
+            base_token = attributes.get('base_token_price_usd')
+            quote_token = attributes.get('quote_token_price_usd')
+
+            # Adresse du token de base
+            token_address = attributes.get('base_token_address')
+            if not token_address:
+                return None
+
+            # Calcul market cap approximatif (si disponible)
+            fdv = float(attributes.get('fdv_usd', 0))
+            market_cap = float(attributes.get('market_cap_usd', fdv))
+
+            # Volume et liquidité
+            volume_24h = float(attributes.get('volume_usd', {}).get('h24', 0))
+            liquidity_usd = float(attributes.get('reserve_in_usd', 0))
+
+            # Prix
+            price_usd = float(attributes.get('base_token_price_usd', 0))
+
+            # Timestamp de création
+            created_at = attributes.get('pool_created_at')
+            pair_created_at = None
+            if created_at:
+                # Convertir ISO 8601 en timestamp milliseconds
+                from datetime import datetime
+                try:
+                    dt = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    pair_created_at = int(dt.timestamp() * 1000)
+                except:
+                    pass
+
+            return {
+                'tokenAddress': token_address,
+                'price_usd': price_usd,
+                'liquidity_usd': liquidity_usd,
+                'volume_24h': volume_24h,
+                'market_cap': market_cap,
+                'fdv': fdv,
+                'pair_address': attributes.get('address'),
+                'dex_id': attributes.get('dex_id'),
+                'chain_id': 'base',
+                'pairCreatedAt': pair_created_at,
+                'baseToken': {
+                    'address': attributes.get('base_token_address'),
+                    'name': attributes.get('name', '').split('/')[0].strip() if '/' in attributes.get('name', '') else '',
+                    'symbol': attributes.get('name', '').split('/')[0].strip() if '/' in attributes.get('name', '') else ''
+                },
+                'quoteToken': {
+                    'address': attributes.get('quote_token_address'),
+                    'name': attributes.get('name', '').split('/')[1].strip() if '/' in attributes.get('name', '') else '',
+                    'symbol': attributes.get('name', '').split('/')[1].strip() if '/' in attributes.get('name', '') else ''
+                },
+                'price_change_1h': float(attributes.get('price_change_percentage', {}).get('h1', 0)),
+                'price_change_24h': float(attributes.get('price_change_percentage', {}).get('h24', 0)),
+                'txns_24h': attributes.get('transactions', {}).get('h24', {}).get('buys', 0) +
+                           attributes.get('transactions', {}).get('h24', {}).get('sells', 0)
+            }
+        except Exception as e:
+            print(f"Erreur formatage pool GeckoTerminal: {e}")
+            return None

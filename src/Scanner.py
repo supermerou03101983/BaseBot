@@ -20,7 +20,7 @@ sys.path.append(str(PROJECT_DIR / 'src'))
 
 from web3 import Web3
 from dotenv import load_dotenv
-from web3_utils import BaseWeb3Manager, UniswapV3Manager, DexScreenerAPI
+from web3_utils import BaseWeb3Manager, UniswapV3Manager, DexScreenerAPI, GeckoTerminalAPI
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
 
@@ -46,6 +46,7 @@ class EnhancedScanner:
             )
             self.uniswap = UniswapV3Manager(self.web3_manager)
             self.dexscreener = DexScreenerAPI()
+            self.geckoterminal = GeckoTerminalAPI()  # Nouveau: API pour nouveaux pools
         except Exception as e:
             self.logger.error(f"Erreur initialisation Web3/API: {e}")
             raise
@@ -121,12 +122,20 @@ class EnhancedScanner:
 
     async def fetch_new_tokens(self) -> List[Dict]:
         """
-        Récupère les nouveaux tokens depuis DexScreener.
-        Utilise l'API pour obtenir les paires récentes sur Base Network.
+        Récupère les nouveaux tokens depuis GeckoTerminal (priorité) puis DexScreener.
+        GeckoTerminal est optimisé pour découvrir les nouveaux pools.
         """
         try:
-            # Récupérer les paires récentes depuis DexScreener (jeunes tokens < 48h)
-            self.logger.info("Récupération des nouveaux tokens depuis DexScreener...")
+            # PRIORITÉ 1: GeckoTerminal pour les nouveaux pools (mis à jour toutes les 60s)
+            self.logger.info("Récupération des nouveaux pools depuis GeckoTerminal...")
+            new_pools = self.geckoterminal.get_new_pools(network='base', page=1)
+
+            if new_pools and len(new_pools) > 0:
+                self.logger.info(f"{len(new_pools)} nouveaux pools trouvés sur GeckoTerminal")
+                return new_pools
+
+            # PRIORITÉ 2: DexScreener en fallback si GeckoTerminal ne retourne rien
+            self.logger.info("Fallback vers DexScreener...")
             new_pairs = self.dexscreener.get_recent_pairs_on_chain('base', limit=50)
 
             if not new_pairs:
