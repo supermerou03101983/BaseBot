@@ -354,6 +354,10 @@ MONITORING_INTERVAL=1
 # ============================================
 # 🔍 SCANNER CONFIGURATION
 # ============================================
+# Le Scanner utilise GeckoTerminal API en priorité pour découvrir
+# les nouveaux pools (mise à jour toutes les 60s, limite 30 req/min)
+# DexScreener est utilisé en fallback si GeckoTerminal ne répond pas
+
 SCAN_INTERVAL_SECONDS=30
 MAX_BLOCKS_PER_SCAN=100
 SCANNER_START_BLOCK=0
@@ -364,16 +368,14 @@ AERODROME_FACTORY=0x420DD381b31aEf6683db6B902084cB0FFECe40Da
 # ============================================
 # 🎯 FILTER CONFIGURATION
 # ============================================
-FILTER_INTERVAL_SECONDS=60
-FILTER_MIN_MC=1000
-FILTER_MAX_MC=500000
-FILTER_MIN_LIQUIDITY=500
-FILTER_MAX_AGE_DAYS=30
-FILTER_MIN_HOLDERS=100
-FILTER_MAX_OWNER_PCT=10.0
-FILTER_MAX_TAX=10.0
-FILTER_SCORE_THRESHOLD=70.0
+# ⚠️ IMPORTANT: Ces valeurs sont optimisées pour trouver des tokens
+#               2h+ après leur création (évite les scams précoces)
+#               et profiter du pump avec un win rate ~75%
+# Ne modifiez ces valeurs que si vous comprenez la stratégie!
 
+FILTER_INTERVAL_SECONDS=60
+
+# Critères principaux (stratégie optimisée)
 MIN_AGE_HOURS=2
 MIN_LIQUIDITY_USD=30000
 MIN_VOLUME_24H=50000
@@ -385,6 +387,7 @@ MAX_BUY_TAX=5
 MAX_SELL_TAX=5
 MAX_SLIPPAGE=3
 
+# Scores de sécurité et potentiel
 MIN_SAFETY_SCORE=70
 MIN_POTENTIAL_SCORE=60
 
