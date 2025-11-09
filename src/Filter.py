@@ -171,6 +171,7 @@ class AdvancedFilter:
             self.max_sell_tax = float(os.getenv('MAX_SELL_TAX', '5.0'))
             self.min_safety_score = float(os.getenv('MIN_SAFETY_SCORE', '70.0'))
             self.min_potential_score = float(os.getenv('MIN_POTENTIAL_SCORE', '60.0'))
+            self.score_threshold = float(os.getenv('MIN_SAFETY_SCORE', '70.0'))  # Utilise MIN_SAFETY_SCORE comme seuil
         except ValueError as e:
             self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut.")
             # Définir des valeurs par défaut si le parsing échoue
