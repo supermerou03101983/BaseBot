@@ -283,11 +283,11 @@ class AdvancedFilter:
         # Taxes (si disponibles via BaseScan ou analyse du contrat)
         buy_tax = token_data.get('buy_tax', 0.0) # Cette donnée doit être récupérée ailleurs
         sell_tax = token_data.get('sell_tax', 0.0) # Cette donnée doit être récupérée ailleurs
-        if buy_tax <= self.max_tax and sell_tax <= self.max_tax:
+        if buy_tax <= self.max_buy_tax and sell_tax <= self.max_sell_tax:
             score += 15
             reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) OK")
         else:
-            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max ({self.max_tax:.2f}%)")
+            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max (B:{self.max_buy_tax:.2f}%, S:{self.max_sell_tax:.2f}%)")
 
         # Données on-chain (détails du contrat, honeypot, etc.) - via web3_utils
         try:
