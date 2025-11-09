@@ -235,13 +235,14 @@ class EnhancedScanner:
                 price_eth = pair_data.get('price_native') if pair_data else None
                 liquidity = pair_data.get('liquidity_usd', 0) if pair_data else 0
                 market_cap = pair_data.get('market_cap', 0) if pair_data else 0
+                volume_24h = pair_data.get('volume_24h', 0) if pair_data else 0
 
                 # Insérer dans la base de données
                 cursor.execute('''
                     INSERT OR IGNORE INTO discovered_tokens
-                    (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, price_usd, price_eth)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, price_usd, price_eth))
+                    (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth))
 
                 self.logger.info(f"✅ Token découvert: {symbol} ({token_address}) - MC: ${market_cap:.2f}")
                 added += 1

@@ -50,6 +50,7 @@ def init_database():
             total_supply TEXT,
             liquidity REAL DEFAULT 0,
             market_cap REAL DEFAULT 0,
+            volume_24h REAL DEFAULT 0,
             price_usd REAL DEFAULT 0,
             price_eth REAL DEFAULT 0,
             created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
