@@ -630,11 +630,15 @@ class GeckoTerminalAPI:
 
                 # Formater les pools pour compatibilité avec notre système
                 result = []
+                skipped = 0
                 for pool in pools:
                     formatted = self._format_pool_data(pool)
                     if formatted:
                         result.append(formatted)
+                    else:
+                        skipped += 1
 
+                print(f"✅ {len(result)} pools formatés avec succès, {skipped} ignorés")
                 return result
             return []
         except Exception as e:
@@ -655,6 +659,11 @@ class GeckoTerminalAPI:
             attributes = pool.get('attributes', {})
             relationships = pool.get('relationships', {})
 
+            # Debug: afficher les clés disponibles pour le premier pool
+            if not hasattr(self, '_debug_done'):
+                print(f"🔍 Debug GeckoTerminal - Clés attributes: {list(attributes.keys())[:10]}")
+                self._debug_done = True
+
             # Extraction des tokens
             base_token = attributes.get('base_token_price_usd')
             quote_token = attributes.get('quote_token_price_usd')
@@ -662,6 +671,7 @@ class GeckoTerminalAPI:
             # Adresse du token de base
             token_address = attributes.get('base_token_address')
             if not token_address:
+                print(f"⚠️ Pool sans base_token_address, clés: {list(attributes.keys())}")
                 return None
 
             # Calcul market cap approximatif (si disponible)
