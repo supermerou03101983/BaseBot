@@ -683,15 +683,17 @@ class GeckoTerminalAPI:
                 return None
 
             # Calcul market cap approximatif (si disponible)
-            fdv = float(attributes.get('fdv_usd', 0))
-            market_cap = float(attributes.get('market_cap_usd', fdv))
+            # Gérer les None en utilisant or 0
+            fdv = float(attributes.get('fdv_usd') or 0)
+            market_cap = float(attributes.get('market_cap_usd') or fdv)
 
             # Volume et liquidité
-            volume_24h = float(attributes.get('volume_usd', {}).get('h24', 0))
-            liquidity_usd = float(attributes.get('reserve_in_usd', 0))
+            volume_usd = attributes.get('volume_usd') or {}
+            volume_24h = float(volume_usd.get('h24') or 0)
+            liquidity_usd = float(attributes.get('reserve_in_usd') or 0)
 
             # Prix
-            price_usd = float(attributes.get('base_token_price_usd', 0))
+            price_usd = float(attributes.get('base_token_price_usd') or 0)
 
             # Timestamp de création
             created_at = attributes.get('pool_created_at')
@@ -740,10 +742,10 @@ class GeckoTerminalAPI:
                     'name': quote_symbol,
                     'symbol': quote_symbol
                 },
-                'price_change_1h': float(attributes.get('price_change_percentage', {}).get('h1', 0)),
-                'price_change_24h': float(attributes.get('price_change_percentage', {}).get('h24', 0)),
-                'txns_24h': attributes.get('transactions', {}).get('h24', {}).get('buys', 0) +
-                           attributes.get('transactions', {}).get('h24', {}).get('sells', 0)
+                'price_change_1h': float((attributes.get('price_change_percentage') or {}).get('h1') or 0),
+                'price_change_24h': float((attributes.get('price_change_percentage') or {}).get('h24') or 0),
+                'txns_24h': (attributes.get('transactions') or {}).get('h24', {}).get('buys', 0) +
+                           (attributes.get('transactions') or {}).get('h24', {}).get('sells', 0)
             }
         except Exception as e:
             print(f"Erreur formatage pool GeckoTerminal: {e}")
