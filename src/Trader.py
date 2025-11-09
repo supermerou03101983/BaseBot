@@ -284,15 +284,13 @@ class RealTrader:
             
             if row:
                 return {
-                    'address': row[0],
-                    'symbol': row[1],
-                    'name': row[2],
-                    'decimals': row[3],
-                    'liquidity': row[4],
-                    'volume_24h': row[5],
-                    'holders': row[6],
-                    'risk_score': row[7],
-                    'price_usd': row[8] or 0
+                    'address': row[0],           # token_address
+                    'symbol': row[1],            # symbol
+                    'name': row[2],              # name
+                    'score': row[3],             # score
+                    'liquidity': row[4] or 0,    # liquidity depuis discovered_tokens
+                    'market_cap': row[5] or 0,   # market_cap depuis discovered_tokens
+                    'price_usd': row[6] or 0     # price_usd depuis discovered_tokens
                 }
             return None
         except Exception as e:
