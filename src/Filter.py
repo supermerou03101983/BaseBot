@@ -265,20 +265,34 @@ class AdvancedFilter:
                 reasons.append(f"Age non vérifié (erreur: {str(e)[:50]})")
 
         # Holders (si disponible via BaseScan ou autre)
-        holders = token_data.get('holder_count', 0) # Cette donnée doit être récupérée ailleurs
-        if holders >= self.min_holders:
-            score += 10
-            reasons.append(f"Holders ({holders}) OK")
+        # ⚠️ TEMPORAIREMENT DÉSACTIVÉ: L'API Base retourne toujours 0
+        # TODO: Réactiver quand l'API Etherscan Base fonctionnera
+        holders = token_data.get('holder_count', 0)
+        if holders > 0:  # Seulement si on a une vraie valeur
+            if holders >= self.min_holders:
+                score += 10
+                reasons.append(f"Holders ({holders}) OK")
+            else:
+                reasons.append(f"Holders ({holders}) < min ({self.min_holders})")
         else:
-            reasons.append(f"Holders ({holders}) < min ({self.min_holders})")
+            # Ne pas pénaliser si API ne fonctionne pas
+            score += 5  # Bonus partiel par défaut
+            reasons.append(f"Holders non disponible (API Base)")
 
         # Owner percentage (si disponible via BaseScan)
-        owner_pct = token_data.get('owner_percentage', 100.0) # Cette donnée doit être récupérée ailleurs
-        if owner_pct <= self.max_owner_percentage:
-            score += 15
-            reasons.append(f"Owner % ({owner_pct:.2f}%) OK")
+        # ⚠️ TEMPORAIREMENT DÉSACTIVÉ: L'API Base retourne toujours 100%
+        # TODO: Réactiver quand l'API Etherscan Base fonctionnera
+        owner_pct = token_data.get('owner_percentage', 100.0)
+        if owner_pct < 100.0:  # Seulement si on a une vraie valeur
+            if owner_pct <= self.max_owner_percentage:
+                score += 15
+                reasons.append(f"Owner % ({owner_pct:.2f}%) OK")
+            else:
+                reasons.append(f"Owner % ({owner_pct:.2f}%) > max ({self.max_owner_percentage:.2f}%)")
         else:
-            reasons.append(f"Owner % ({owner_pct:.2f}%) > max ({self.max_owner_percentage:.2f}%)")
+            # Ne pas pénaliser si API ne fonctionne pas
+            score += 7  # Bonus partiel par défaut
+            reasons.append(f"Owner % non disponible (API Base)")
 
         # Taxes (si disponibles via BaseScan ou analyse du contrat)
         buy_tax = token_data.get('buy_tax', 0.0) # Cette donnée doit être récupérée ailleurs
