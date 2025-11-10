@@ -964,7 +964,7 @@ class RealTrader:
                                 f"📊 Opportunite detectee: {token['symbol']} | "
                                 f"Liq: ${token['liquidity']:,.0f} | "
                                 f"Vol: ${token['volume_24h']:,.0f} | "
-                                f"Risk: {token['risk_score']}"
+                                f"Score: {token['score']}"
                             )
                             
                             # Verification finale avant achat
