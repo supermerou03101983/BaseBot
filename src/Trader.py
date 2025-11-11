@@ -786,28 +786,28 @@ class RealTrader:
                 # Sauvegarder l'etat en cas d'erreur
                 self.save_position_state(position)
 
-    def save_trade_to_db(self, token: Dict, action: str, price: float, 
+    def save_trade_to_db(self, token: Dict, action: str, price: float,
                          amount_eth: float, mode: str, tx_hash: str = ''):
         """Sauvegarde un trade dans la DB"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
+
             # Inserer dans trade_log avec le schema correct
             cursor.execute('''
-                INSERT INTO trade_log 
+                INSERT INTO trade_log
                 (timestamp, level, message, token_address, tx_hash)
                 VALUES (CURRENT_TIMESTAMP, ?, ?, ?, ?)
             ''', ('INFO', f'{action} {token["symbol"]} @ ${price:.8f}', token['address'], tx_hash))
-            
+
             if action == 'BUY':
-                # Inserer dans trade_history
+                # Inserer dans trade_history avec entry_time
                 cursor.execute('''
                     INSERT INTO trade_history
-                    (token_address, symbol, side, amount_in, price, timestamp)
-                    VALUES (?, ?, 'BUY', ?, ?, CURRENT_TIMESTAMP)
+                    (token_address, symbol, side, amount_in, price, entry_time, timestamp)
+                    VALUES (?, ?, 'BUY', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
                 ''', (token['address'], token['symbol'], amount_eth, price))
-                
+
             conn.commit()
             conn.close()
         except Exception as e:
@@ -816,36 +816,41 @@ class RealTrader:
                 conn.close()
        
     def save_sell_to_db(self, position: Position, profit: float, reason: str, mode: str, tx_hash: str = ''):
-        """Sauvegarde une vente dans la DB"""
+        """Sauvegarde une vente dans la DB en mettant a jour la ligne existante"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Inserer dans trade_history
+
+            # MISE A JOUR de la ligne existante (BUY) avec les donnees de sortie
             cursor.execute('''
-                INSERT INTO trade_history
-                (token_address, symbol, side, amount_out, price, profit_loss, timestamp)
-                VALUES (?, ?, 'SELL', ?, ?, ?, CURRENT_TIMESTAMP)
-            ''', (position.token_address, position.symbol, position.amount_eth, 
-                  position.current_price, profit))
-            
+                UPDATE trade_history
+                SET amount_out = ?,
+                    exit_time = CURRENT_TIMESTAMP,
+                    profit_loss = ?
+                WHERE token_address = ?
+                AND exit_time IS NULL
+            ''', (position.amount_eth, profit, position.token_address))
+
+            if cursor.rowcount == 0:
+                self.logger.warning(f"Aucune position ouverte trouvee pour {position.symbol} dans trade_history")
+
             # Log la transaction
             cursor.execute('''
-                INSERT INTO trade_log 
+                INSERT INTO trade_log
                 (timestamp, level, message, token_address, tx_hash)
                 VALUES (CURRENT_TIMESTAMP, ?, ?, ?, ?)
-            ''', ('INFO', f'SELL {position.symbol} - Profit: {profit:.2f}% - {reason}', 
+            ''', ('INFO', f'SELL {position.symbol} - Profit: {profit:.2f}% - {reason}',
                   position.token_address, tx_hash))
-            
+
             # Inserer dans trailing_level_stats si c'etait un trailing stop
             if position.trailing_active:
                 cursor.execute('''
                     INSERT INTO trailing_level_stats
                     (token_address, level, activation_price, stop_loss_price, timestamp)
                     VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ''', (position.token_address, position.current_level, 
+                ''', (position.token_address, position.current_level,
                       position.highest_price, position.stop_loss))
-            
+
             conn.commit()
             conn.close()
         except Exception as e:
