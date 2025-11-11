@@ -361,19 +361,25 @@ class RealTrader:
         
         # Si trailing actif, ajuster le stop loss dynamiquement
         if position.trailing_active:
-            # Determiner la distance selon le niveau de profit
-            distance = 3  # Par defaut
-            current_level = 0
-            
+            # Determiner la distance selon le niveau de profit ACTUEL (depuis highest_price)
+            # Calculer le profit depuis le pic pour determiner le niveau
+            profit_from_peak = ((position.current_price - position.entry_price) /
+                               position.entry_price) * 100
+
+            distance = 3  # Par defaut (niveau 1)
+            current_level = position.current_level  # Ne JAMAIS descendre
+
             for i, level in enumerate(self.trailing_config['levels']):
-                if level['min_profit'] <= profit_percent < level['max_profit']:
+                if level['min_profit'] <= profit_from_peak < level['max_profit']:
                     distance = level['distance']
-                    current_level = i + 1
+                    # Le niveau ne peut QUE monter
+                    if i + 1 > position.current_level:
+                        current_level = i + 1
                     break
-            
+
             # Calculer le nouveau stop
             new_stop = position.highest_price * (1 - distance / 100)
-            
+
             # Ne mettre a jour que si le nouveau stop est meilleur
             if new_stop > position.stop_loss or current_level > position.current_level:
                 old_stop = position.stop_loss
