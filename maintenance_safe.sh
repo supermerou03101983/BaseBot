@@ -15,6 +15,10 @@ BACKUP_DIR="/home/basebot/trading-bot/data/backups"
 # Créer le répertoire de backups si nécessaire
 mkdir -p "$BACKUP_DIR"
 
+# S'assurer que les logs appartiennent à basebot (évite les problèmes de permissions)
+touch "$LOG_FILE"
+chown basebot:basebot "$LOG_FILE" 2>/dev/null || true
+
 # Fonction de log
 log() {
     echo "[$(date '+%Y-%m-%d %H:%M:%S')] $1" | tee -a "$LOG_FILE"
@@ -115,6 +119,10 @@ log "✅ Vieux logs nettoyés"
 # =============================================================================
 log "📊 Génération des statistiques mensuelles..."
 STATS_FILE="/home/basebot/trading-bot/logs/stats_$(date +%Y%m).txt"
+
+# Créer le fichier et définir les bonnes permissions
+touch "$STATS_FILE"
+chown basebot:basebot "$STATS_FILE" 2>/dev/null || true
 
 sqlite3 "$DB_FILE" << 'SQL' > "$STATS_FILE" 2>/dev/null || log "⚠️  Erreur statistiques"
 .headers on

@@ -670,6 +670,13 @@ else
     print_warning "Script maintenance_safe.sh non trouvé"
 fi
 
+print_step "Pré-création des fichiers de logs avec bonnes permissions..."
+# Créer les fichiers de logs que la maintenance va utiliser
+touch "$BOT_DIR/logs/maintenance.log"
+touch "$BOT_DIR/logs/stats_$(date +%Y%m).txt"
+chown -R $BOT_USER:$BOT_USER "$BOT_DIR/logs/"
+print_success "Fichiers de logs initialisés"
+
 print_step "Configuration des cron jobs automatiques..."
 # Créer un fichier temporaire avec les cron jobs
 CRON_FILE="/tmp/basebot_cron_$$"
