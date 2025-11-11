@@ -656,10 +656,61 @@ else
 fi
 
 # =============================================================================
-# 11. Tests de validation
+# 11. Configuration de la maintenance automatique
 # =============================================================================
 
-print_header "1️⃣1️⃣ Tests de validation"
+print_header "1️⃣1️⃣ Configuration de la maintenance automatique"
+
+print_step "Copie du script de maintenance safe..."
+if [ -f "$BOT_DIR/maintenance_safe.sh" ]; then
+    chmod +x "$BOT_DIR/maintenance_safe.sh"
+    chown $BOT_USER:$BOT_USER "$BOT_DIR/maintenance_safe.sh"
+    print_success "Script de maintenance configuré"
+else
+    print_warning "Script maintenance_safe.sh non trouvé"
+fi
+
+print_step "Configuration des cron jobs automatiques..."
+# Créer un fichier temporaire avec les cron jobs
+CRON_FILE="/tmp/basebot_cron_$$"
+cat > "$CRON_FILE" << 'CRONEOF'
+# ============================================
+# BaseBot Trading - Cron Jobs Automatiques
+# ============================================
+
+# Backup quotidien de la base de données (2h du matin)
+0 2 * * * cp /home/basebot/trading-bot/data/trading.db /home/basebot/trading-bot/data/backups/trading_$(date +\%Y\%m\%d).db 2>/dev/null
+
+# Maintenance hebdomadaire safe (dimanche 3h du matin)
+# Ne redémarre AUCUN service - préserve les trailing stops
+0 3 * * 0 /home/basebot/trading-bot/maintenance_safe.sh 2>&1
+
+# Maintenance mensuelle complète (1er du mois à 4h du matin)
+# Archive les vieux trades, génère les stats, nettoie les backups
+0 4 1 * * /home/basebot/trading-bot/maintenance_safe.sh 2>&1
+
+# Nettoyage des logs journaliers (tous les jours à 1h du matin)
+0 1 * * * find /home/basebot/trading-bot/logs/ -name "*.log" -size +500M -delete 2>/dev/null
+
+CRONEOF
+
+# Installer les cron jobs pour l'utilisateur basebot
+su - $BOT_USER -c "crontab $CRON_FILE" >> "$LOG_FILE" 2>&1
+rm -f "$CRON_FILE"
+
+# Vérifier l'installation
+CRON_COUNT=$(su - $BOT_USER -c "crontab -l 2>/dev/null | grep -c basebot" || echo "0")
+if [ "$CRON_COUNT" -gt 0 ]; then
+    print_success "Cron jobs configurés: $CRON_COUNT tâches automatiques"
+else
+    print_warning "Problème avec la configuration des cron jobs"
+fi
+
+# =============================================================================
+# 12. Tests de validation
+# =============================================================================
+
+print_header "1️⃣2️⃣ Tests de validation"
 
 print_step "Vérification de l'installation Python..."
 su - $BOT_USER -c "source $VENV_DIR/bin/activate && python -c 'import web3, pandas, streamlit; print(\"✓ Modules OK\")'" >> "$LOG_FILE" 2>&1
@@ -729,6 +780,14 @@ echo -e "   ${CYAN}systemctl status basebot-scanner${NC}"
 echo -e "   ${CYAN}systemctl status basebot-filter${NC}"
 echo -e "   ${CYAN}systemctl status basebot-trader${NC}"
 echo -e "   ${CYAN}systemctl status basebot-dashboard${NC}"
+echo ""
+
+echo -e "${GREEN}${BOLD}✅ Maintenance Automatique Configurée:${NC}"
+echo -e "  ${GREEN}•${NC} Backup quotidien: ${CYAN}2h du matin${NC}"
+echo -e "  ${GREEN}•${NC} Maintenance hebdo: ${CYAN}Dimanche 3h${NC}"
+echo -e "  ${GREEN}•${NC} Maintenance mensuelle: ${CYAN}1er du mois 4h${NC}"
+echo -e "  ${GREEN}•${NC} Nettoyage logs: ${CYAN}Tous les jours 1h${NC}"
+echo -e "  ${YELLOW}⚠️${NC}  Aucun service n'est redémarré (trailing stops préservés)"
 echo ""
 
 echo -e "${CYAN}📊 Dashboard:${NC}"

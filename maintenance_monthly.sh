@@ -13,7 +13,7 @@ log "📧 Début de la maintenance mensuelle"
 
 # Vérifier les services actifs avant maintenance
 SERVICES_RUNNING=""
-for service in base-scanner base-filter base-trader base-dashboard; do
+for service in basebot-scanner basebot-filter basebot-trader basebot-dashboard; do
     if systemctl is-active --quiet "$service"; then
         SERVICES_RUNNING="$SERVICES_RUNNING $service"
     fi
