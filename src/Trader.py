@@ -25,6 +25,7 @@ from web3_utils import (
     BaseWeb3Manager, UniswapV3Manager,
     DexScreenerAPI, CoinGeckoAPI
 )
+from honeypot_checker import HoneypotChecker
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
 
@@ -66,6 +67,7 @@ class RealTrader:
             self.uniswap = UniswapV3Manager(self.web3_manager)
             self.dexscreener = DexScreenerAPI()
             self.coingecko = CoinGeckoAPI(os.getenv('COINGECKO_API_KEY'))
+            self.honeypot_checker = HoneypotChecker()
         except Exception as e:
             self.logger.error(f"Erreur initialisation Web3: {e}")
             raise
@@ -400,6 +402,33 @@ class RealTrader:
             if fresh_volume < min_volume_24h * 0.5:  # Tolérance 50%
                 return False, f"Volume 24h a chuté: ${fresh_volume:,.0f} (possible abandon)"
 
+            # VÉRIFICATION HONEYPOT (Protection critique)
+            self.logger.info(f"🍯 Vérification honeypot pour {token['symbol']}...")
+            honeypot_result = self.honeypot_checker.check_token(token['address'], chain_id=8453)
+
+            if honeypot_result.get('error'):
+                # Si l'API est down, logger mais ne pas bloquer (mode dégradé)
+                self.logger.warning(
+                    f"⚠️  API Honeypot indisponible: {honeypot_result['error']} "
+                    f"- Trade autorisé en mode dégradé"
+                )
+            elif not honeypot_result['is_safe']:
+                # Token dangereux détecté
+                flags = ', '.join(honeypot_result['flags'])
+                return False, (
+                    f"Token dangereux: {flags} | "
+                    f"Risk={honeypot_result['risk_level']} | "
+                    f"Taxes: Buy={honeypot_result['buy_tax']:.1f}% Sell={honeypot_result['sell_tax']:.1f}% | "
+                    f"Can_Sell={honeypot_result['can_sell']}"
+                )
+            else:
+                # Token safe
+                self.logger.info(
+                    f"🛡️  Honeypot check PASSED: {token['symbol']} | "
+                    f"Taxes: Buy={honeypot_result['buy_tax']:.1f}% Sell={honeypot_result['sell_tax']:.1f}% | "
+                    f"Risk={honeypot_result['risk_level']}"
+                )
+
             self.logger.info(
                 f"✅ Token {token['symbol']} validé: "
                 f"Liq=${fresh_liquidity:,.0f} Vol=${fresh_volume:,.0f}"
@@ -672,25 +701,65 @@ class RealTrader:
             else:
                 # Mode reel
                 self.logger.info(f"[REAL] Preparation achat: {token['symbol']}")
-                
+
                 # Calculer la taille de position (15%)
                 position_size_eth = self.calculate_position_size()
                 position_size_wei = int(position_size_eth * 10**18)
-                
-                # Slippage 2%
-                slippage = 0.02
-                
-                # Obtenir le prix actuel
-                expected_amount = self.uniswap.get_token_price(
-                    weth_address,
-                    position_size_wei
-                ) / position_size_eth
-                
-                min_amount = int(expected_amount * (1 - slippage))
-                
+
+                # Lire slippage depuis .env
+                slippage_percent = float(os.getenv('MAX_SLIPPAGE_PERCENT', 3))
+                slippage = slippage_percent / 100
+
+                # Verifier le gas price avant d'executer
+                current_gas_price = self.web3_manager.w3.eth.gas_price
+                max_gas_price_gwei = float(os.getenv('MAX_GAS_PRICE_GWEI', 50))
+                max_gas_price_wei = int(max_gas_price_gwei * 10**9)
+
+                if current_gas_price > max_gas_price_wei:
+                    self.logger.warning(
+                        f"⛽ Gas price trop eleve: {current_gas_price/10**9:.1f} Gwei > "
+                        f"{max_gas_price_gwei:.1f} Gwei - Achat annule"
+                    )
+                    return False
+
+                self.logger.info(f"⛽ Gas price: {current_gas_price/10**9:.1f} Gwei")
+
+                # CORRECTION: Calculer le nombre de tokens attendus pour position_size_wei ETH
+                # On achete des tokens avec de l'ETH, donc on envoie token['address'] pour obtenir son prix
+                # La fonction get_token_price retourne le prix en ETH pour 1 token
+                # On doit calculer combien de tokens on recevra pour position_size_wei ETH
+
+                # Methode correcte: utiliser le prix USD du token
+                eth_price_usd = self.coingecko.get_eth_price()
+                if eth_price_usd == 0:
+                    eth_price_usd = 3000  # Fallback
+
+                # Valeur de notre achat en USD
+                buy_value_usd = position_size_eth * eth_price_usd
+
+                # Nombre de tokens qu'on devrait recevoir
+                token_price_usd = token['price_usd']
+                if token_price_usd <= 0:
+                    self.logger.error(f"Prix token invalide: ${token_price_usd}")
+                    return False
+
+                expected_tokens = buy_value_usd / token_price_usd
+
+                # Appliquer slippage
+                min_tokens_out = int(expected_tokens * (1 - slippage))
+
+                self.logger.info(
+                    f"💰 Achat {position_size_eth:.4f} ETH (${buy_value_usd:.2f}) "
+                    f"-> ~{expected_tokens:.0f} {token['symbol']} "
+                    f"(min: {min_tokens_out:.0f} avec {slippage_percent}% slippage)"
+                )
+
                 # Preparer la transaction
                 deadline = int(time.time()) + 300  # 5 minutes
-                
+
+                # Lire gas limit depuis .env
+                gas_limit_buy = int(os.getenv('GAS_LIMIT_BUY', 250000))
+
                 params = {
                     'tokenIn': Web3.to_checksum_address(weth_address),
                     'tokenOut': Web3.to_checksum_address(token['address']),
@@ -698,16 +767,16 @@ class RealTrader:
                     'recipient': self.web3_manager.account.address,
                     'deadline': deadline,
                     'amountIn': position_size_wei,
-                    'amountOutMinimum': min_amount,
+                    'amountOutMinimum': min_tokens_out,
                     'sqrtPriceLimitX96': 0
                 }
-                
+
                 # Construire la transaction
                 swap_txn = self.router.functions.exactInputSingle(params).build_transaction({
                     'from': self.web3_manager.account.address,
                     'value': position_size_wei,
-                    'gas': 200000,
-                    'gasPrice': self.web3_manager.w3.eth.gas_price,
+                    'gas': gas_limit_buy,
+                    'gasPrice': current_gas_price,
                     'nonce': self.web3_manager.w3.eth.get_transaction_count(
                         self.web3_manager.account.address
                     )
@@ -809,9 +878,25 @@ class RealTrader:
                 weth_address = "0x4200000000000000000000000000000000000006"
                 router_address = self.uniswap.router
                 
+                # Verifier le gas price avant d'executer
+                current_gas_price = self.web3_manager.w3.eth.gas_price
+                max_gas_price_gwei = float(os.getenv('MAX_GAS_PRICE_GWEI', 50))
+                max_gas_price_wei = int(max_gas_price_gwei * 10**9)
+
+                if current_gas_price > max_gas_price_wei:
+                    self.logger.warning(
+                        f"⛽ Gas price trop eleve: {current_gas_price/10**9:.1f} Gwei > "
+                        f"{max_gas_price_gwei:.1f} Gwei - Vente reportee"
+                    )
+                    # Ne pas vendre si gas trop cher, sauf si c'est une urgence (stop loss)
+                    if "Stop Loss" not in reason:
+                        return False
+
+                self.logger.info(f"⛽ Gas price: {current_gas_price/10**9:.1f} Gwei")
+
                 # 1. APPROVE TOKEN POUR LE ROUTER
                 self.logger.info("etape 1: Approval du token pour le router")
-                
+
                 approve_abi = json.loads('''[
                     {
                         "inputs": [
@@ -823,21 +908,21 @@ class RealTrader:
                         "type": "function"
                     }
                 ]''')
-                
+
                 token_contract = self.web3_manager.w3.eth.contract(
                     address=Web3.to_checksum_address(position.token_address),
                     abi=approve_abi
                 )
-                
+
                 amount_to_sell = int(position.amount)
-                
+
                 approve_txn = token_contract.functions.approve(
                     Web3.to_checksum_address(router_address),
                     amount_to_sell
                 ).build_transaction({
                     'from': self.web3_manager.account.address,
                     'gas': 100000,
-                    'gasPrice': self.web3_manager.w3.eth.gas_price,
+                    'gasPrice': current_gas_price,
                     'nonce': self.web3_manager.w3.eth.get_transaction_count(
                         self.web3_manager.account.address
                     )
@@ -862,17 +947,30 @@ class RealTrader:
                 
                 # 2. EXeCUTER LE SWAP TOKEN -> WETH
                 self.logger.info("etape 2: Swap token vers WETH")
-                
-                # Calculer le minimum acceptable (3% slippage)
+
+                # Lire slippage depuis .env
+                slippage_percent = float(os.getenv('MAX_SLIPPAGE_PERCENT', 3))
+                slippage = slippage_percent / 100
+
+                # Calculer le minimum acceptable
                 eth_price = self.coingecko.get_eth_price()
                 if eth_price == 0:
                     eth_price = 3000  # Valeur par defaut si erreur API
-                    
+
                 expected_weth = (position.current_price * position.amount) / eth_price
-                min_weth_out = int(expected_weth * 0.97 * 10**18)  # 3% slippage
-                
+                min_weth_out = int(expected_weth * (1 - slippage) * 10**18)
+
+                self.logger.info(
+                    f"💰 Vente ~{position.amount:.0f} {position.symbol} "
+                    f"-> ~{expected_weth:.4f} ETH "
+                    f"(min: {min_weth_out/10**18:.4f} avec {slippage_percent}% slippage)"
+                )
+
                 deadline = int(time.time()) + 300  # 5 minutes
-                
+
+                # Lire gas limit depuis .env
+                gas_limit_sell = int(os.getenv('GAS_LIMIT_SELL', 300000))
+
                 swap_params = {
                     'tokenIn': Web3.to_checksum_address(position.token_address),
                     'tokenOut': Web3.to_checksum_address(weth_address),
@@ -883,13 +981,13 @@ class RealTrader:
                     'amountOutMinimum': min_weth_out,
                     'sqrtPriceLimitX96': 0
                 }
-                
+
                 swap_txn = self.router.functions.exactInputSingle(
                     swap_params
                 ).build_transaction({
                     'from': self.web3_manager.account.address,
-                    'gas': 250000,
-                    'gasPrice': self.web3_manager.w3.eth.gas_price,
+                    'gas': gas_limit_sell,
+                    'gasPrice': current_gas_price,
                     'nonce': self.web3_manager.w3.eth.get_transaction_count(
                         self.web3_manager.account.address
                     )
@@ -1117,6 +1215,8 @@ class RealTrader:
             self.dexscreener.close()
         if hasattr(self, 'coingecko'):
             self.coingecko.close()
+        if hasattr(self, 'honeypot_checker'):
+            self.honeypot_checker.close()
        
     def run(self):
         """Boucle principale avec monitoring 1 seconde"""
