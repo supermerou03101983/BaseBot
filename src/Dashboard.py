@@ -106,13 +106,9 @@ with col2:
     st.metric("Tokens Approuvés", tokens_approved)
 
 with col3:
-    # Compter les positions actives (exit_time IS NULL)
-    active_positions = pd.read_sql_query("""
-        SELECT COUNT(*) as count
-        FROM trade_history
-        WHERE exit_time IS NULL
-    """, conn).iloc[0]['count']
-    st.metric("Positions Actives", active_positions)
+    # Compter les positions actives depuis les fichiers JSON (source de vérité)
+    position_files_count = len(list((PROJECT_DIR / 'data').glob('position_*.json')))
+    st.metric("Positions Actives", position_files_count)
 
 with col4:
     # Compter les trades complétés (positions fermées)
@@ -131,26 +127,54 @@ tab1, tab2, tab3, tab4, tab5 = st.tabs(
 
 with tab1:
     st.header("Positions Actives")
-    
+
+    # Compter les fichiers JSON (source de vérité)
+    position_files = list((PROJECT_DIR / 'data').glob('position_*.json'))
+    num_json_positions = len(position_files)
+
+    # Compter dans la DB
+    db_positions_count = pd.read_sql_query("""
+        SELECT COUNT(*) as count FROM trade_history WHERE exit_time IS NULL
+    """, conn).iloc[0]['count']
+
+    # Afficher les compteurs avec avertissement si désynchronisé
+    col_a, col_b = st.columns(2)
+    with col_a:
+        st.metric("Positions en mémoire (JSON)", num_json_positions)
+    with col_b:
+        st.metric("Positions en base (DB)", db_positions_count)
+
+    if num_json_positions != db_positions_count:
+        st.warning(f"⚠️ Désynchronisation: {num_json_positions} fichiers JSON mais {db_positions_count} dans la DB. Redémarrez le Trader pour synchroniser.")
+
     # Récupérer les positions actives depuis les fichiers JSON
     positions_data = []
-    position_files = list((PROJECT_DIR / 'data').glob('position_*.json'))
-    
+
     for pos_file in position_files:
         try:
             with open(pos_file, 'r') as f:
                 pos_data = json.load(f)
+
+                # Calculer le profit actuel
+                entry_price = pos_data.get('entry_price', 0)
+                current_price = pos_data.get('current_price', entry_price)
+                profit = 0
+                if entry_price > 0:
+                    profit = ((current_price - entry_price) / entry_price) * 100
+
                 positions_data.append({
                     'Symbol': pos_data.get('symbol', 'Unknown'),
-                    'Prix Entrée': f"${pos_data.get('entry_price', 0):.8f}",
+                    'Prix Entrée': f"${entry_price:.8f}",
+                    'Prix Actuel': f"${current_price:.8f}",
+                    'Profit': f"{profit:+.2f}%",
                     'Prix Stop': f"${pos_data.get('stop_loss', 0):.8f}",
                     'Niveau': pos_data.get('current_level', 0),
-                    'Trailing Actif': '✅' if pos_data.get('trailing_active') else '❌',
+                    'Trailing': '✅' if pos_data.get('trailing_active') else '❌',
                     'Entrée': pos_data.get('entry_time', 'Unknown')
                 })
         except Exception as e:
-            st.error(f"Erreur lecture position: {e}")
-    
+            st.error(f"Erreur lecture position {pos_file.name}: {e}")
+
     if positions_data:
         positions_df = pd.DataFrame(positions_data)
         st.dataframe(positions_df, use_container_width=True)
@@ -267,63 +291,106 @@ with tab4:
         st.info("Aucun historique disponible")
 
 with tab5:
-    st.header("Configuration Avancée")
-    
-    # Afficher la configuration actuelle depuis trading_config
-    st.subheader("Paramètres de Trading")
-    
-    config_df = pd.read_sql_query("""
-        SELECT key, value FROM trading_config
-        ORDER BY key
+    st.header("Configuration du Bot")
+
+    # Lire la configuration depuis le fichier .env
+    import os
+    from pathlib import Path
+
+    env_path = PROJECT_DIR / 'config' / '.env'
+    config_data = {}
+
+    if env_path.exists():
+        with open(env_path, 'r') as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith('#') and '=' in line:
+                    key, value = line.split('=', 1)
+                    config_data[key.strip()] = value.strip()
+
+    # Afficher les paramètres par catégorie
+    col1, col2 = st.columns(2)
+
+    with col1:
+        st.subheader("🎯 Stratégie de Trading")
+        st.metric("Mode", config_data.get('TRADING_MODE', 'N/A').upper())
+        st.metric("Taille Position", f"{config_data.get('POSITION_SIZE_PERCENT', 'N/A')}%")
+        st.metric("Max Positions", config_data.get('MAX_POSITIONS', 'N/A'))
+        st.metric("Max Trades/Jour", config_data.get('MAX_TRADES_PER_DAY', 'N/A'))
+        st.metric("Stop Loss", f"-{config_data.get('STOP_LOSS_PERCENT', 'N/A')}%")
+
+        st.subheader("🔍 Scanner")
+        st.text(f"Intervalle: {config_data.get('SCAN_INTERVAL_SECONDS', 'N/A')}s")
+        st.text(f"Max Blocks/Scan: {config_data.get('MAX_BLOCKS_PER_SCAN', 'N/A')}")
+
+    with col2:
+        st.subheader("📈 Trailing Stop")
+        st.text(f"Activation: +{config_data.get('TRAILING_ACTIVATION_THRESHOLD', 'N/A')}%")
+
+        st.markdown("**Niveaux:**")
+        st.text(f"Niveau 1: {config_data.get('TRAILING_L1_MIN', 'N/A')}-{config_data.get('TRAILING_L1_MAX', 'N/A')}% → -{config_data.get('TRAILING_L1_DISTANCE', 'N/A')}%")
+        st.text(f"Niveau 2: {config_data.get('TRAILING_L2_MIN', 'N/A')}-{config_data.get('TRAILING_L2_MAX', 'N/A')}% → -{config_data.get('TRAILING_L2_DISTANCE', 'N/A')}%")
+        st.text(f"Niveau 3: {config_data.get('TRAILING_L3_MIN', 'N/A')}-{config_data.get('TRAILING_L3_MAX', 'N/A')}% → -{config_data.get('TRAILING_L3_DISTANCE', 'N/A')}%")
+        st.text(f"Niveau 4: {config_data.get('TRAILING_L4_MIN', 'N/A')}%+ → -{config_data.get('TRAILING_L4_DISTANCE', 'N/A')}%")
+
+        st.subheader("⏱️ Time Exit")
+        st.text(f"Stagnation: {config_data.get('TIME_EXIT_STAGNATION_HOURS', 'N/A')}h si < {config_data.get('TIME_EXIT_STAGNATION_MIN_PROFIT', 'N/A')}%")
+        st.text(f"Low Momentum: {config_data.get('TIME_EXIT_LOW_MOMENTUM_HOURS', 'N/A')}h si < {config_data.get('TIME_EXIT_LOW_MOMENTUM_MIN_PROFIT', 'N/A')}%")
+        st.text(f"Maximum: {config_data.get('TIME_EXIT_MAXIMUM_HOURS', 'N/A')}h force exit")
+
+    # Section Filter
+    st.subheader("🎯 Critères de Filtrage")
+    col3, col4, col5 = st.columns(3)
+
+    with col3:
+        st.markdown("**Âge & Volume**")
+        st.text(f"Min Âge: {config_data.get('MIN_AGE_HOURS', 'N/A')}h")
+        st.text(f"Min Volume 24h: ${config_data.get('MIN_VOLUME_24H', 'N/A')}")
+        st.text(f"Min Liquidité: ${config_data.get('MIN_LIQUIDITY_USD', 'N/A')}")
+
+    with col4:
+        st.markdown("**Market Cap**")
+        st.text(f"Min: ${config_data.get('MIN_MARKET_CAP', 'N/A')}")
+        st.text(f"Max: ${config_data.get('MAX_MARKET_CAP', 'N/A')}")
+        st.markdown("**Holders**")
+        st.text(f"Min: {config_data.get('MIN_HOLDERS', 'N/A')}")
+
+    with col5:
+        st.markdown("**Taxes & Scores**")
+        st.text(f"Max Buy Tax: {config_data.get('MAX_BUY_TAX', 'N/A')}%")
+        st.text(f"Max Sell Tax: {config_data.get('MAX_SELL_TAX', 'N/A')}%")
+        st.text(f"Min Safety Score: {config_data.get('MIN_SAFETY_SCORE', 'N/A')}")
+
+    # Historique des trailing stops qui ont été déclenchés
+    st.subheader("📊 Historique Trailing Stops Déclenchés")
+
+    trailing_history = pd.read_sql_query("""
+        SELECT
+            th.symbol,
+            th.entry_time,
+            th.exit_time,
+            th.profit_loss,
+            ROUND((JULIANDAY(th.exit_time) - JULIANDAY(th.entry_time)) * 24, 1) as duration_hours,
+            tls.level as trailing_level,
+            tls.activation_price,
+            tls.stop_loss_price
+        FROM trade_history th
+        LEFT JOIN trailing_level_stats tls ON th.token_address = tls.token_address
+        WHERE th.exit_time IS NOT NULL
+        AND tls.level IS NOT NULL
+        ORDER BY th.exit_time DESC
+        LIMIT 10
     """, conn)
-    
-    if not config_df.empty:
-        # Organiser par catégorie
-        scanner_config = config_df[config_df['key'].str.startswith('MAX_BLOCKS') | 
-                                  config_df['key'].str.startswith('SCAN')]
-        filter_config = config_df[config_df['key'].str.startswith('MIN_') | 
-                                config_df['key'].str.startswith('MAX_')]
-        trader_config = config_df[config_df['key'].str.startswith('POSITION') | 
-                                config_df['key'].str.startswith('STOP') |
-                                config_df['key'].str.startswith('TRAILING') |
-                                config_df['key'].str.startswith('TIME')]
-        
-        col1, col2, col3 = st.columns(3)
-        
-        with col1:
-            st.write("**Scanner**")
-            for _, row in scanner_config.iterrows():
-                st.text(f"{row['key']}: {row['value']}")
-        
-        with col2:
-            st.write("**Filter**")
-            for _, row in filter_config[:5].iterrows():
-                st.text(f"{row['key']}: {row['value']}")
-        
-        with col3:
-            st.write("**Trader**")
-            for _, row in trader_config[:5].iterrows():
-                st.text(f"{row['key']}: {row['value']}")
-    
-    # Statistiques des niveaux de trailing
-    st.subheader("Statistiques Trailing Stop")
-    
-    trailing_stats = pd.read_sql_query("""
-        SELECT 
-            token_address,
-            level,
-            activation_price,
-            stop_loss_price,
-            timestamp
-        FROM trailing_level_stats
-        ORDER BY timestamp DESC
-        LIMIT 20
-    """, conn)
-    
-    if not trailing_stats.empty:
-        st.dataframe(trailing_stats, use_container_width=True)
+
+    if not trailing_history.empty:
+        trailing_history['profit_loss'] = trailing_history['profit_loss'].apply(lambda x: f"{x:.2f}%" if x else "N/A")
+        trailing_history['activation_price'] = trailing_history['activation_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
+        trailing_history['stop_loss_price'] = trailing_history['stop_loss_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
+        trailing_history['duration_hours'] = trailing_history['duration_hours'].apply(lambda x: f"{x:.1f}h" if x else "N/A")
+        trailing_history.columns = ['Symbol', 'Entrée', 'Sortie', 'Profit', 'Durée', 'Niveau', 'Prix Max', 'Stop Loss']
+        st.dataframe(trailing_history, use_container_width=True)
     else:
-        st.info("Aucune statistique de trailing disponible")
+        st.info("Aucun trailing stop déclenché pour le moment")
 
 conn.close()
 
