@@ -216,13 +216,13 @@ with tab3:
             at.token_address,
             at.symbol,
             at.name,
-            at.safety_score as score,
-            at.approved_at as created_at
+            at.score,
+            at.created_at
         FROM approved_tokens at
         WHERE at.token_address NOT IN (
             SELECT DISTINCT token_address FROM trade_history
         )
-        ORDER BY at.safety_score DESC, at.approved_at DESC
+        ORDER BY at.score DESC, at.created_at DESC
         LIMIT 20
     """, conn)
     
