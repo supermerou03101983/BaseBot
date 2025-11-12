@@ -925,6 +925,10 @@ class RealTrader:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
+            # Calculer la valeur de sortie en ETH
+            # amount_out = amount_in * (1 + profit/100)
+            amount_out_eth = position.amount_eth * (1 + profit / 100)
+
             # MISE A JOUR de la ligne existante (BUY) avec les donnees de sortie
             cursor.execute('''
                 UPDATE trade_history
@@ -933,7 +937,7 @@ class RealTrader:
                     profit_loss = ?
                 WHERE token_address = ?
                 AND exit_time IS NULL
-            ''', (position.amount_eth, profit, position.token_address))
+            ''', (amount_out_eth, profit, position.token_address))
 
             if cursor.rowcount == 0:
                 self.logger.warning(f"Aucune position ouverte trouvee pour {position.symbol} dans trade_history")
