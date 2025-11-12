@@ -326,7 +326,7 @@ class RealTrader:
                 }
 
                 # Obtenir données fraîches pour momentum
-                dex_data = self.dexscreener.get_token_data(token_data['address'])
+                dex_data = self.dexscreener.get_token_info(token_data['address'])
                 if dex_data:
                     momentum_score = self.calculate_momentum_score(token_data, dex_data)
                     token_data['momentum_score'] = momentum_score
@@ -386,7 +386,7 @@ class RealTrader:
                 return False, "Prix invalide ou non disponible"
 
             # Obtenir données fraîches depuis DexScreener
-            dex_data = self.dexscreener.get_token_data(token['address'])
+            dex_data = self.dexscreener.get_token_info(token['address'])
             if not dex_data:
                 return False, "Impossible d'obtenir données DexScreener"
 
