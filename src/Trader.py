@@ -206,6 +206,7 @@ class RealTrader:
                     'token_address': position.token_address,
                     'symbol': position.symbol,
                     'entry_price': position.entry_price,
+                    'current_price': position.current_price,  # AJOUT: prix actuel pour Dashboard
                     'amount': position.amount,
                     'amount_eth': position.amount_eth,
                     'stop_loss': position.stop_loss,
