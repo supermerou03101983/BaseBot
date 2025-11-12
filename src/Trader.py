@@ -263,13 +263,15 @@ class RealTrader:
             self.logger.info(f"✅ {loaded_count} positions recuperees")
     
     def get_next_token(self) -> Optional[Dict]:
-        """Recupere le prochain token a trader (filtre tokens trop vieux)"""
+        """
+        Recupere le prochain token a trader avec priorisation par momentum
+        Récupère les 5 meilleurs candidats et choisit celui avec le meilleur momentum actuel
+        """
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Recuperer depuis approved_tokens avec filtrage par age
-            # Tokens approuvés il y a plus de X heures sont considérés obsolètes
+            # Recuperer TOP 5 tokens frais (pas expirés)
             cursor.execute("""
                 SELECT at.token_address, at.symbol, at.name, at.score,
                        dt.liquidity, dt.market_cap, dt.price_usd, dt.volume_24h,
@@ -281,45 +283,79 @@ class RealTrader:
                 )
                 AND datetime(at.created_at) > datetime('now', '-' || ? || ' hours')
                 ORDER BY at.score DESC, at.created_at DESC
-                LIMIT 1
+                LIMIT 5
             """, (self.token_max_age_hours,))
 
-            row = cursor.fetchone()
-
-            if row:
-                token_data = {
-                    'address': row[0],           # token_address
-                    'symbol': row[1],            # symbol
-                    'name': row[2],              # name
-                    'score': row[3],             # score
-                    'liquidity': row[4] or 0,    # liquidity depuis discovered_tokens
-                    'market_cap': row[5] or 0,   # market_cap depuis discovered_tokens
-                    'price_usd': row[6] or 0,    # price_usd depuis discovered_tokens
-                    'volume_24h': row[7] or 0,   # volume_24h depuis discovered_tokens
-                    'created_at': row[8]         # created_at pour logging
-                }
-                conn.close()
-                return token_data
-
-            # Aucun token frais trouvé - vérifier si des tokens expirent
-            cursor.execute("""
-                SELECT COUNT(*) FROM approved_tokens
-                WHERE token_address NOT IN (
-                    SELECT token_address FROM trade_history WHERE exit_time IS NULL
-                )
-                AND datetime(created_at) <= datetime('now', '-' || ? || ' hours')
-            """, (self.token_max_age_hours,))
-
-            expired_count = cursor.fetchone()[0]
+            rows = cursor.fetchall()
             conn.close()
 
-            if expired_count > 0:
-                self.logger.warning(
-                    f"⏰ {expired_count} tokens approuvés ont expiré "
-                    f"(>{self.token_max_age_hours}h) - Aucun token frais disponible"
+            if not rows:
+                # Vérifier tokens expirés
+                conn = sqlite3.connect(self.db_path)
+                cursor = conn.cursor()
+                cursor.execute("""
+                    SELECT COUNT(*) FROM approved_tokens
+                    WHERE token_address NOT IN (
+                        SELECT token_address FROM trade_history WHERE exit_time IS NULL
+                    )
+                    AND datetime(created_at) <= datetime('now', '-' || ? || ' hours')
+                """, (self.token_max_age_hours,))
+                expired_count = cursor.fetchone()[0]
+                conn.close()
+
+                if expired_count > 0:
+                    self.logger.warning(
+                        f"⏰ {expired_count} tokens approuvés ont expiré "
+                        f"(>{self.token_max_age_hours}h) - Aucun token frais disponible"
+                    )
+                return None
+
+            # Calculer le momentum score pour chaque candidat
+            candidates = []
+            for row in rows:
+                token_data = {
+                    'address': row[0],
+                    'symbol': row[1],
+                    'name': row[2],
+                    'score': row[3],
+                    'liquidity': row[4] or 0,
+                    'market_cap': row[5] or 0,
+                    'price_usd': row[6] or 0,
+                    'volume_24h': row[7] or 0,
+                    'created_at': row[8]
+                }
+
+                # Obtenir données fraîches pour momentum
+                dex_data = self.dex_screener.get_token_data(token_data['address'])
+                if dex_data:
+                    momentum_score = self.calculate_momentum_score(token_data, dex_data)
+                    token_data['momentum_score'] = momentum_score
+                    token_data['dex_data'] = dex_data
+                    candidates.append(token_data)
+
+            if not candidates:
+                self.logger.warning("Aucun candidat avec données DexScreener disponibles")
+                return None
+
+            # Trier par momentum score (meilleur en premier)
+            candidates.sort(key=lambda x: x['momentum_score'], reverse=True)
+
+            # Log les scores des candidats
+            self.logger.info(f"🎯 {len(candidates)} candidats évalués:")
+            for i, c in enumerate(candidates[:3], 1):  # Top 3
+                self.logger.info(
+                    f"  {i}. {c['symbol']}: Momentum={c['momentum_score']:.1f} "
+                    f"Score={c['score']:.1f} Age={c.get('created_at', 'N/A')[:16]}"
                 )
 
-            return None
+            # Retourner le meilleur
+            best = candidates[0]
+            self.logger.info(
+                f"✨ Token sélectionné: {best['symbol']} (Momentum: {best['momentum_score']:.1f}/100)"
+            )
+
+            return best
+
         except Exception as e:
             self.logger.error(f"Erreur recuperation token: {e}")
             return None
@@ -373,6 +409,91 @@ class RealTrader:
         except Exception as e:
             self.logger.error(f"Erreur validation token {token.get('symbol')}: {e}")
             return False, f"Erreur validation: {str(e)}"
+
+    def calculate_momentum_score(self, token: Dict, dex_data: Dict) -> float:
+        """
+        Calcule un score de momentum dynamique (0-100) pour prioriser les tokens
+        Basé sur: tendance prix, ratio vol/liq, vélocité achats, stabilité
+        """
+        try:
+            score = 0.0
+
+            # 1. RATIO VOLUME/LIQUIDITÉ (0-30 points)
+            # Plus le volume est élevé par rapport à la liquidité = plus d'activité
+            liquidity = dex_data.get('liquidity', 0)
+            volume_24h = dex_data.get('volume_24h', 0)
+
+            if liquidity > 0:
+                vol_liq_ratio = volume_24h / liquidity
+                # Ratio idéal: 1-3 (100-300% du liquidity en volume)
+                if vol_liq_ratio > 3:
+                    score += 30  # Très actif
+                elif vol_liq_ratio > 1.5:
+                    score += 25  # Actif
+                elif vol_liq_ratio > 0.8:
+                    score += 20  # Modéré
+                elif vol_liq_ratio > 0.3:
+                    score += 10  # Faible
+                # Sinon 0 points
+
+            # 2. TENDANCE DE PRIX (0-30 points)
+            # Variation prix sur 5min et 1h
+            price_change_5m = dex_data.get('price_change_5m', 0)
+            price_change_1h = dex_data.get('price_change_1h', 0)
+
+            # 5min doit être positif (momentum court terme)
+            if price_change_5m > 5:
+                score += 15  # Fort momentum
+            elif price_change_5m > 2:
+                score += 10  # Bon momentum
+            elif price_change_5m > 0:
+                score += 5   # Momentum positif
+            # Négatif = 0 points
+
+            # 1h doit être positif mais pas trop (éviter FOMO)
+            if 0 < price_change_1h < 30:
+                score += 15  # Tendance saine
+            elif 30 <= price_change_1h < 100:
+                score += 10  # Tendance forte
+            elif price_change_1h >= 100:
+                score += 5   # Risque de correction
+            # Négatif = 0 points
+
+            # 3. BUY PRESSURE (0-25 points)
+            # Ratio buy/sell transactions
+            txns = dex_data.get('txns', {})
+            buys = txns.get('buys', 0)
+            sells = txns.get('sells', 0)
+
+            if buys + sells > 0:
+                buy_ratio = buys / (buys + sells)
+                if buy_ratio > 0.7:
+                    score += 25  # Forte pression acheteuse
+                elif buy_ratio > 0.6:
+                    score += 20  # Bonne pression
+                elif buy_ratio > 0.5:
+                    score += 15  # Équilibré
+                elif buy_ratio > 0.4:
+                    score += 10  # Légère vente
+                # < 0.4 = pression vendeuse (0 points)
+
+            # 4. STABILITÉ (0-15 points)
+            # Pas de dump récent
+            price_change_5m_abs = abs(price_change_5m)
+
+            if price_change_5m_abs < 10:
+                score += 15  # Stable
+            elif price_change_5m_abs < 20:
+                score += 10  # Modéré
+            elif price_change_5m_abs < 30:
+                score += 5   # Volatil
+            # > 30% = très volatil (0 points)
+
+            return min(score, 100)  # Cap à 100
+
+        except Exception as e:
+            self.logger.warning(f"Erreur calcul momentum score: {e}")
+            return 50.0  # Score neutre par défaut
 
     def get_eth_balance(self) -> float:
         """Recupere le balance ETH du wallet"""
