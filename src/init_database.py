@@ -161,6 +161,7 @@ def init_database():
         ('STOP_LOSS_PERCENT', '5'),
         ('MONITORING_INTERVAL', '1'),
         ('TRAILING_ACTIVATION_THRESHOLD', '12'),
+        ('TOKEN_APPROVAL_MAX_AGE_HOURS', '12'),  # Expiration des tokens approuvés
         
         # Time exit configuration
         ('TIME_EXIT_STAGNATION_HOURS', '24'),

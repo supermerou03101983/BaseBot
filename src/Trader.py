@@ -151,6 +151,7 @@ class RealTrader:
         self.max_trades_per_day = int(os.getenv('MAX_TRADES_PER_DAY', 3))
         self.stop_loss_percent = float(os.getenv('STOP_LOSS_PERCENT', 5))
         self.monitoring_interval = int(os.getenv('MONITORING_INTERVAL', 1))
+        self.token_max_age_hours = int(os.getenv('TOKEN_APPROVAL_MAX_AGE_HOURS', 12))
         
         # Configuration trailing stop unique
         self.trailing_config = {
@@ -261,29 +262,31 @@ class RealTrader:
             self.logger.info(f"✅ {loaded_count} positions recuperees")
     
     def get_next_token(self) -> Optional[Dict]:
-        """Recupere le prochain token a trader"""
+        """Recupere le prochain token a trader (filtre tokens trop vieux)"""
         try:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
-            
-            # Recuperer depuis approved_tokens avec le schema valide
+
+            # Recuperer depuis approved_tokens avec filtrage par age
+            # Tokens approuvés il y a plus de X heures sont considérés obsolètes
             cursor.execute("""
                 SELECT at.token_address, at.symbol, at.name, at.score,
-                       dt.liquidity, dt.market_cap, dt.price_usd, dt.volume_24h
+                       dt.liquidity, dt.market_cap, dt.price_usd, dt.volume_24h,
+                       at.created_at
                 FROM approved_tokens at
                 LEFT JOIN discovered_tokens dt ON at.token_address = dt.token_address
                 WHERE at.token_address NOT IN (
                     SELECT token_address FROM trade_history WHERE exit_time IS NULL
                 )
+                AND datetime(at.created_at) > datetime('now', '-' || ? || ' hours')
                 ORDER BY at.score DESC, at.created_at DESC
                 LIMIT 1
-            """)
+            """, (self.token_max_age_hours,))
 
             row = cursor.fetchone()
-            conn.close()
 
             if row:
-                return {
+                token_data = {
                     'address': row[0],           # token_address
                     'symbol': row[1],            # symbol
                     'name': row[2],              # name
@@ -291,13 +294,85 @@ class RealTrader:
                     'liquidity': row[4] or 0,    # liquidity depuis discovered_tokens
                     'market_cap': row[5] or 0,   # market_cap depuis discovered_tokens
                     'price_usd': row[6] or 0,    # price_usd depuis discovered_tokens
-                    'volume_24h': row[7] or 0    # volume_24h depuis discovered_tokens
+                    'volume_24h': row[7] or 0,   # volume_24h depuis discovered_tokens
+                    'created_at': row[8]         # created_at pour logging
                 }
+                conn.close()
+                return token_data
+
+            # Aucun token frais trouvé - vérifier si des tokens expirent
+            cursor.execute("""
+                SELECT COUNT(*) FROM approved_tokens
+                WHERE token_address NOT IN (
+                    SELECT token_address FROM trade_history WHERE exit_time IS NULL
+                )
+                AND datetime(created_at) <= datetime('now', '-' || ? || ' hours')
+            """, (self.token_max_age_hours,))
+
+            expired_count = cursor.fetchone()[0]
+            conn.close()
+
+            if expired_count > 0:
+                self.logger.warning(
+                    f"⏰ {expired_count} tokens approuvés ont expiré "
+                    f"(>{self.token_max_age_hours}h) - Aucun token frais disponible"
+                )
+
             return None
         except Exception as e:
             self.logger.error(f"Erreur recuperation token: {e}")
             return None
         
+    def validate_token_before_buy(self, token: Dict) -> tuple[bool, str]:
+        """
+        Re-valide un token avant achat (vérification de fraîcheur des données)
+        Retourne (is_valid, reason)
+        """
+        try:
+            # Critères minimums depuis les variables d'environnement
+            min_liquidity = float(os.getenv('MIN_LIQUIDITY_USD', '30000'))
+            min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '50000'))
+
+            # Vérifier liquidité actuelle
+            current_liquidity = token.get('liquidity', 0)
+            if current_liquidity < min_liquidity:
+                return False, f"Liquidité insuffisante: ${current_liquidity:,.0f} < ${min_liquidity:,.0f}"
+
+            # Vérifier volume actuel
+            current_volume = token.get('volume_24h', 0)
+            if current_volume < min_volume_24h:
+                return False, f"Volume 24h insuffisant: ${current_volume:,.0f} < ${min_volume_24h:,.0f}"
+
+            # Vérifier que le prix est valide
+            current_price = token.get('price_usd', 0)
+            if current_price <= 0:
+                return False, "Prix invalide ou non disponible"
+
+            # Obtenir données fraîches depuis DexScreener
+            dex_data = self.dex_screener.get_token_data(token['address'])
+            if not dex_data:
+                return False, "Impossible d'obtenir données DexScreener"
+
+            # Vérifier que la liquidité n'a pas été retirée (rug pull)
+            fresh_liquidity = dex_data.get('liquidity', 0)
+            if fresh_liquidity < min_liquidity:
+                return False, f"Liquidité actuelle trop basse: ${fresh_liquidity:,.0f} (possible rug)"
+
+            # Vérifier que le volume n'a pas chuté drastiquement
+            fresh_volume = dex_data.get('volume_24h', 0)
+            if fresh_volume < min_volume_24h * 0.5:  # Tolérance 50%
+                return False, f"Volume 24h a chuté: ${fresh_volume:,.0f} (possible abandon)"
+
+            self.logger.info(
+                f"✅ Token {token['symbol']} validé: "
+                f"Liq=${fresh_liquidity:,.0f} Vol=${fresh_volume:,.0f}"
+            )
+            return True, "Token valide"
+
+        except Exception as e:
+            self.logger.error(f"Erreur validation token {token.get('symbol')}: {e}")
+            return False, f"Erreur validation: {str(e)}"
+
     def get_eth_balance(self) -> float:
         """Recupere le balance ETH du wallet"""
         try:
@@ -434,9 +509,17 @@ class RealTrader:
         if not token.get('address') or not token.get('symbol'):
             self.logger.error("Token invalide: donnees manquantes")
             return False
-            
+
         if token.get('price_usd', 0) <= 0:
             self.logger.error(f"Prix invalide pour {token['symbol']}: {token.get('price_usd')}")
+            return False
+
+        # RE-VALIDATION avant achat (protection contre tokens obsolètes/rug)
+        is_valid, reason = self.validate_token_before_buy(token)
+        if not is_valid:
+            self.logger.warning(
+                f"❌ Token {token['symbol']} rejeté à la re-validation: {reason}"
+            )
             return False
             
         try:
@@ -985,12 +1068,21 @@ class RealTrader:
                             if token.get('price_usd', 0) <= 0:
                                 self.logger.warning(f"Token {token.get('symbol')} avec prix invalide, ignore")
                                 continue
-                                
+
+                            # Calculer l'âge du token
+                            from datetime import datetime
+                            if token.get('created_at'):
+                                created_dt = datetime.fromisoformat(token['created_at'].replace('Z', '+00:00'))
+                                token_age_hours = (datetime.now(created_dt.tzinfo) - created_dt).total_seconds() / 3600
+                                age_str = f"{token_age_hours:.1f}h"
+                            else:
+                                age_str = "N/A"
+
                             self.logger.info(
                                 f"📊 Opportunite detectee: {token['symbol']} | "
                                 f"Liq: ${token['liquidity']:,.0f} | "
                                 f"Vol: ${token['volume_24h']:,.0f} | "
-                                f"Score: {token['score']}"
+                                f"Score: {token['score']} | Age: {age_str}"
                             )
                             
                             # Verification finale avant achat

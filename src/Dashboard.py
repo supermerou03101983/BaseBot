@@ -318,6 +318,7 @@ with tab5:
         st.metric("Max Positions", config_data.get('MAX_POSITIONS', 'N/A'))
         st.metric("Max Trades/Jour", config_data.get('MAX_TRADES_PER_DAY', 'N/A'))
         st.metric("Stop Loss", f"-{config_data.get('STOP_LOSS_PERCENT', 'N/A')}%")
+        st.metric("Expiration Tokens", f"{config_data.get('TOKEN_APPROVAL_MAX_AGE_HOURS', 'N/A')}h")
 
         st.subheader("🔍 Scanner")
         st.text(f"Intervalle: {config_data.get('SCAN_INTERVAL_SECONDS', 'N/A')}s")
