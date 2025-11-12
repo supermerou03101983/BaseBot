@@ -106,21 +106,21 @@ with col2:
     st.metric("Tokens Approuvés", tokens_approved)
 
 with col3:
-    # Compter les positions actives en cherchant les BUY sans SELL correspondant
+    # Compter les positions actives (exit_time IS NULL)
     active_positions = pd.read_sql_query("""
-        SELECT COUNT(DISTINCT token_address) as count 
-        FROM trade_history 
-        WHERE side = 'BUY' 
-        AND token_address NOT IN (
-            SELECT token_address FROM trade_history WHERE side = 'SELL'
-        )
+        SELECT COUNT(*) as count
+        FROM trade_history
+        WHERE exit_time IS NULL
     """, conn).iloc[0]['count']
     st.metric("Positions Actives", active_positions)
 
 with col4:
-    total_trades = pd.read_sql_query(
-        "SELECT COUNT(*) as count FROM trade_history WHERE side = 'SELL'", conn
-    ).iloc[0]['count']
+    # Compter les trades complétés (positions fermées)
+    total_trades = pd.read_sql_query("""
+        SELECT COUNT(*) as count
+        FROM trade_history
+        WHERE exit_time IS NOT NULL
+    """, conn).iloc[0]['count']
     st.metric("Trades Complétés", total_trades)
 
 # Tabs principaux
@@ -160,15 +160,15 @@ with tab1:
 with tab2:
     st.header("Performance")
     
-    # Graphique des profits par jour
+    # Graphique des profits par jour (positions fermées uniquement)
     profits_df = pd.read_sql_query("""
-        SELECT 
-            DATE(timestamp) as date,
+        SELECT
+            DATE(exit_time) as date,
             AVG(profit_loss) as avg_profit,
             COUNT(*) as trades
         FROM trade_history
-        WHERE side = 'SELL' AND profit_loss IS NOT NULL
-        GROUP BY DATE(timestamp)
+        WHERE exit_time IS NOT NULL AND profit_loss IS NOT NULL
+        GROUP BY DATE(exit_time)
         ORDER BY date DESC
         LIMIT 30
     """, conn)
@@ -188,14 +188,14 @@ with tab2:
     col1, col2, col3 = st.columns(3)
     
     stats = pd.read_sql_query("""
-        SELECT 
+        SELECT
             COUNT(*) as total_trades,
             COUNT(CASE WHEN profit_loss > 0 THEN 1 END) as winning_trades,
             AVG(profit_loss) as avg_profit,
             MAX(profit_loss) as best_trade,
             MIN(profit_loss) as worst_trade
         FROM trade_history
-        WHERE side = 'SELL'
+        WHERE exit_time IS NOT NULL
     """, conn)
     
     if not stats.empty and stats.iloc[0]['total_trades'] > 0:
@@ -216,13 +216,13 @@ with tab3:
             at.token_address,
             at.symbol,
             at.name,
-            at.score,
-            at.created_at
+            at.safety_score as score,
+            at.approved_at as created_at
         FROM approved_tokens at
         WHERE at.token_address NOT IN (
-            SELECT DISTINCT token_address FROM trade_history WHERE side = 'BUY'
+            SELECT DISTINCT token_address FROM trade_history
         )
-        ORDER BY at.score DESC, at.created_at DESC
+        ORDER BY at.safety_score DESC, at.approved_at DESC
         LIMIT 20
     """, conn)
     
@@ -236,27 +236,32 @@ with tab3:
 
 with tab4:
     st.header("Historique des Trades")
-    
-    # Afficher les derniers trades
+
+    # Afficher les derniers trades (fermés uniquement)
     history_df = pd.read_sql_query("""
-        SELECT 
-            th.symbol,
-            th.side,
-            th.price,
-            th.amount_in,
-            th.amount_out,
-            th.profit_loss,
-            th.timestamp
-        FROM trade_history th
-        ORDER BY th.timestamp DESC
+        SELECT
+            symbol,
+            price as entry_price,
+            amount_in,
+            amount_out,
+            profit_loss,
+            entry_time,
+            exit_time,
+            ROUND((JULIANDAY(exit_time) - JULIANDAY(entry_time)) * 24, 1) as duration_hours
+        FROM trade_history
+        WHERE exit_time IS NOT NULL
+        ORDER BY exit_time DESC
         LIMIT 50
     """, conn)
-    
+
     if not history_df.empty:
         # Formater l'affichage
-        history_df['price'] = history_df['price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
+        history_df['entry_price'] = history_df['entry_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
         history_df['profit_loss'] = history_df['profit_loss'].apply(lambda x: f"{x:.2f}%" if x else "N/A")
-        history_df.columns = ['Symbol', 'Side', 'Prix', 'In', 'Out', 'P&L', 'Date']
+        history_df['amount_in'] = history_df['amount_in'].apply(lambda x: f"{x:.4f}" if x else "N/A")
+        history_df['amount_out'] = history_df['amount_out'].apply(lambda x: f"{x:.4f}" if x else "N/A")
+        history_df['duration_hours'] = history_df['duration_hours'].apply(lambda x: f"{x:.1f}h" if x else "N/A")
+        history_df.columns = ['Symbol', 'Prix Entrée', 'In (ETH)', 'Out (ETH)', 'P&L', 'Entrée', 'Sortie', 'Durée']
         st.dataframe(history_df, use_container_width=True)
     else:
         st.info("Aucun historique disponible")

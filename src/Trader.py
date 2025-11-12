@@ -404,15 +404,15 @@ class RealTrader:
         profit_percent = ((position.current_price - position.entry_price) / 
                          position.entry_price) * 100
         
-        # Stagnation: 24h avec profit < 5%
+        # Stagnation: 24h avec profit entre 0% et 5% (ne pas vendre si négatif!)
         if hours_held >= self.time_exit_config['stagnation']['hours']:
-            if profit_percent < self.time_exit_config['stagnation']['min_profit']:
+            if 0 < profit_percent < self.time_exit_config['stagnation']['min_profit']:
                 self.performance_metrics['time_exits'] += 1
                 return True, f"Stagnation ({hours_held:.0f}h, +{profit_percent:.1f}%)"
-        
-        # Low momentum: 48h avec profit < 20%
+
+        # Low momentum: 48h avec profit entre 0% et 20% (ne pas vendre si négatif!)
         if hours_held >= self.time_exit_config['low_momentum']['hours']:
-            if profit_percent < self.time_exit_config['low_momentum']['min_profit']:
+            if 0 < profit_percent < self.time_exit_config['low_momentum']['min_profit']:
                 self.performance_metrics['time_exits'] += 1
                 return True, f"Low momentum ({hours_held:.0f}h, +{profit_percent:.1f}%)"
         
@@ -749,8 +749,23 @@ class RealTrader:
                             time.sleep(2)
                 
                 if dex_data:
-                    position.current_price = dex_data.get('price_usd', position.current_price)
-                    
+                    new_price = dex_data.get('price_usd', position.current_price)
+
+                    # Validation du prix: ne peut pas varier de plus de 1000x par rapport au prix d'entrée
+                    if new_price > 0 and position.entry_price > 0:
+                        price_change_ratio = new_price / position.entry_price
+                        if price_change_ratio > 1000 or price_change_ratio < 0.001:
+                            self.logger.warning(
+                                f"⚠️ Prix aberrant pour {position.symbol}: "
+                                f"Entry=${position.entry_price:.8f}, New=${new_price:.8f} "
+                                f"(ratio: {price_change_ratio:.1f}x) - Prix ignoré"
+                            )
+                            # Garder le dernier prix connu
+                        else:
+                            position.current_price = new_price
+                    else:
+                        position.current_price = new_price
+
                     # Protection contre division par zero
                     if position.entry_price == 0:
                         self.logger.error(f"Prix d'entree invalide pour {position.symbol}")
