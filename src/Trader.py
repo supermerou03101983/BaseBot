@@ -1196,7 +1196,6 @@ class RealTrader:
                                 continue
 
                             # Calculer l'âge du token
-                            from datetime import datetime
                             if token.get('created_at'):
                                 created_dt = datetime.fromisoformat(token['created_at'].replace('Z', '+00:00'))
                                 token_age_hours = (datetime.now(created_dt.tzinfo) - created_dt).total_seconds() / 3600
