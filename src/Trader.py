@@ -362,45 +362,35 @@ class RealTrader:
             self.logger.error(f"Erreur recuperation token: {e}")
             return None
         
-    def validate_token_before_buy(self, token: Dict) -> tuple[bool, str]:
+    def validate_token_before_buy(self, token: Dict) -> tuple[bool, str, float]:
         """
         Re-valide un token avant achat (vérification de fraîcheur des données)
-        Retourne (is_valid, reason)
+        Retourne (is_valid, reason, fresh_price)
         """
         try:
             # Critères minimums depuis les variables d'environnement
             min_liquidity = float(os.getenv('MIN_LIQUIDITY_USD', '30000'))
             min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '50000'))
 
-            # Vérifier liquidité actuelle
-            current_liquidity = token.get('liquidity', 0)
-            if current_liquidity < min_liquidity:
-                return False, f"Liquidité insuffisante: ${current_liquidity:,.0f} < ${min_liquidity:,.0f}"
-
-            # Vérifier volume actuel
-            current_volume = token.get('volume_24h', 0)
-            if current_volume < min_volume_24h:
-                return False, f"Volume 24h insuffisant: ${current_volume:,.0f} < ${min_volume_24h:,.0f}"
-
-            # Vérifier que le prix est valide
-            current_price = token.get('price_usd', 0)
-            if current_price <= 0:
-                return False, "Prix invalide ou non disponible"
-
-            # Obtenir données fraîches depuis DexScreener
+            # Obtenir données fraîches depuis DexScreener (PRIORITÉ: prix frais)
             dex_data = self.dexscreener.get_token_info(token['address'])
             if not dex_data:
-                return False, "Impossible d'obtenir données DexScreener"
+                return False, "Impossible d'obtenir données DexScreener", 0
+
+            # Récupérer le prix frais (CRITICAL pour éviter faux gains)
+            fresh_price = dex_data.get('price_usd', 0)
+            if fresh_price <= 0:
+                return False, "Prix frais invalide ou non disponible", 0
 
             # Vérifier que la liquidité n'a pas été retirée (rug pull)
             fresh_liquidity = dex_data.get('liquidity_usd', 0)  # Clé corrigée
             if fresh_liquidity < min_liquidity:
-                return False, f"Liquidité actuelle trop basse: ${fresh_liquidity:,.0f} (possible rug)"
+                return False, f"Liquidité actuelle trop basse: ${fresh_liquidity:,.0f} (possible rug)", 0
 
             # Vérifier que le volume n'a pas chuté drastiquement
             fresh_volume = dex_data.get('volume_24h', 0)
             if fresh_volume < min_volume_24h * 0.5:  # Tolérance 50%
-                return False, f"Volume 24h a chuté: ${fresh_volume:,.0f} (possible abandon)"
+                return False, f"Volume 24h a chuté: ${fresh_volume:,.0f} (possible abandon)", 0
 
             # VÉRIFICATION HONEYPOT (Protection critique)
             self.logger.info(f"🍯 Vérification honeypot pour {token['symbol']}...")
@@ -420,7 +410,7 @@ class RealTrader:
                     f"Risk={honeypot_result['risk_level']} | "
                     f"Taxes: Buy={honeypot_result['buy_tax']:.1f}% Sell={honeypot_result['sell_tax']:.1f}% | "
                     f"Can_Sell={honeypot_result['can_sell']}"
-                )
+                ), 0
             else:
                 # Token safe
                 self.logger.info(
@@ -431,13 +421,13 @@ class RealTrader:
 
             self.logger.info(
                 f"✅ Token {token['symbol']} validé: "
-                f"Liq=${fresh_liquidity:,.0f} Vol=${fresh_volume:,.0f}"
+                f"Prix=${fresh_price:.8f} Liq=${fresh_liquidity:,.0f} Vol=${fresh_volume:,.0f}"
             )
-            return True, "Token valide"
+            return True, "Token valide", fresh_price
 
         except Exception as e:
             self.logger.error(f"Erreur validation token {token.get('symbol')}: {e}")
-            return False, f"Erreur validation: {str(e)}"
+            return False, f"Erreur validation: {str(e)}", 0
 
     def calculate_momentum_score(self, token: Dict, dex_data: Dict) -> float:
         """
@@ -666,36 +656,41 @@ class RealTrader:
             return False
 
         # RE-VALIDATION avant achat (protection contre tokens obsolètes/rug)
-        is_valid, reason = self.validate_token_before_buy(token)
+        is_valid, reason, fresh_price = self.validate_token_before_buy(token)
         if not is_valid:
             self.logger.warning(
                 f"❌ Token {token['symbol']} rejeté à la re-validation: {reason}"
             )
             return False
+
+        # Utiliser le prix FRAIS (pas celui de la DB qui peut être vieux de 48h!)
+        entry_price = fresh_price
             
         try:
             weth_address = "0x4200000000000000000000000000000000000006"
             
             if self.trading_mode == 'paper':
                 # Mode simulation
-                self.logger.info(f"[PAPER] Achat simule: {token['symbol']}")
-                
-                # Simuler la position
+                self.logger.info(
+                    f"[PAPER] Achat simule: {token['symbol']} @ ${entry_price:.8f}"
+                )
+
+                # Simuler la position avec le prix FRAIS
                 position = Position(
                     token['address'],
                     token['symbol'],
-                    token['price_usd'],
+                    entry_price,  # Prix frais de la re-validation
                     1000000,  # Amount simule
                     0.15  # 0.15 ETH simule (15%)
                 )
                 position.trailing_config = self.trailing_config
-                
+
                 self.positions[token['address']] = position
                 self.save_position_state(position)
-                
-                # Enregistrer dans la DB
-                self.save_trade_to_db(token, 'BUY', token['price_usd'], 0.15, 'paper')
-                
+
+                # Enregistrer dans la DB avec le prix frais
+                self.save_trade_to_db(token, 'BUY', entry_price, 0.15, 'paper')
+
                 return True
                 
             else:
@@ -793,12 +788,12 @@ class RealTrader:
                 
                 if receipt['status'] == 1:
                     self.logger.info(f"✅ Achat reussi: {token['symbol']}")
-                    
-                    # Creer la position
+
+                    # Creer la position avec le prix FRAIS
                     position = Position(
                         token['address'],
                         token['symbol'],
-                        token['price_usd'],
+                        entry_price,  # Prix frais de la re-validation
                         expected_amount,
                         position_size_eth
                     )
@@ -807,9 +802,9 @@ class RealTrader:
                     self.positions[token['address']] = position
                     self.save_position_state(position)
                     
-                    # Enregistrer
+                    # Enregistrer avec le prix frais
                     self.save_trade_to_db(
-                        token, 'BUY', token['price_usd'],
+                        token, 'BUY', entry_price,
                         position_size_eth, 'real', tx_hash.hex()
                     )
                     
