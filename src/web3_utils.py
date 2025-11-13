@@ -401,6 +401,10 @@ class DexScreenerAPI:
                 'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0)),
                 'txns_24h': (pair.get('txns', {}).get('h24', {}).get('buys', 0) +
                            pair.get('txns', {}).get('h24', {}).get('sells', 0)),
+                'txns': {
+                    'buys': pair.get('txns', {}).get('h24', {}).get('buys', 0),
+                    'sells': pair.get('txns', {}).get('h24', {}).get('sells', 0)
+                },
                 'fdv': float(pair.get('fdv', 0)),
                 'market_cap': float(pair.get('marketCap', 0)),
                 'pair_address': pair.get('pairAddress'),

@@ -393,7 +393,7 @@ class RealTrader:
                 return False, "Impossible d'obtenir données DexScreener"
 
             # Vérifier que la liquidité n'a pas été retirée (rug pull)
-            fresh_liquidity = dex_data.get('liquidity', 0)
+            fresh_liquidity = dex_data.get('liquidity_usd', 0)  # Clé corrigée
             if fresh_liquidity < min_liquidity:
                 return False, f"Liquidité actuelle trop basse: ${fresh_liquidity:,.0f} (possible rug)"
 
@@ -449,7 +449,7 @@ class RealTrader:
 
             # 1. RATIO VOLUME/LIQUIDITÉ (0-30 points)
             # Plus le volume est élevé par rapport à la liquidité = plus d'activité
-            liquidity = dex_data.get('liquidity', 0)
+            liquidity = dex_data.get('liquidity_usd', 0)  # Clé corrigée
             volume_24h = dex_data.get('volume_24h', 0)
 
             if liquidity > 0:
@@ -466,25 +466,25 @@ class RealTrader:
                 # Sinon 0 points
 
             # 2. TENDANCE DE PRIX (0-30 points)
-            # Variation prix sur 5min et 1h
-            price_change_5m = dex_data.get('price_change_5m', 0)
+            # Variation prix sur 1h et 24h
             price_change_1h = dex_data.get('price_change_1h', 0)
+            price_change_24h = dex_data.get('price_change_24h', 0)
 
-            # 5min doit être positif (momentum court terme)
-            if price_change_5m > 5:
+            # 1h doit être positif (momentum court terme)
+            if price_change_1h > 10:
                 score += 15  # Fort momentum
-            elif price_change_5m > 2:
-                score += 10  # Bon momentum
-            elif price_change_5m > 0:
-                score += 5   # Momentum positif
+            elif price_change_1h > 5:
+                score += 12  # Bon momentum
+            elif price_change_1h > 0:
+                score += 8   # Momentum positif
             # Négatif = 0 points
 
-            # 1h doit être positif mais pas trop (éviter FOMO)
-            if 0 < price_change_1h < 30:
+            # 24h doit être positif mais pas trop (éviter FOMO)
+            if 0 < price_change_24h < 50:
                 score += 15  # Tendance saine
-            elif 30 <= price_change_1h < 100:
+            elif 50 <= price_change_24h < 200:
                 score += 10  # Tendance forte
-            elif price_change_1h >= 100:
+            elif price_change_24h >= 200:
                 score += 5   # Risque de correction
             # Négatif = 0 points
 
@@ -507,16 +507,16 @@ class RealTrader:
                 # < 0.4 = pression vendeuse (0 points)
 
             # 4. STABILITÉ (0-15 points)
-            # Pas de dump récent
-            price_change_5m_abs = abs(price_change_5m)
+            # Pas de dump récent (basé sur variation 1h)
+            price_change_1h_abs = abs(price_change_1h)
 
-            if price_change_5m_abs < 10:
+            if price_change_1h_abs < 20:
                 score += 15  # Stable
-            elif price_change_5m_abs < 20:
+            elif price_change_1h_abs < 40:
                 score += 10  # Modéré
-            elif price_change_5m_abs < 30:
+            elif price_change_1h_abs < 60:
                 score += 5   # Volatil
-            # > 30% = très volatil (0 points)
+            # > 60% = très volatil (0 points)
 
             return min(score, 100)  # Cap à 100
 
