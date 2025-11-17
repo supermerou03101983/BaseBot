@@ -463,24 +463,30 @@ with tab4:
             axis=1
         )
 
+        # Calculer total des frais AVANT formatage (garder valeurs numériques)
+        amount_in_numeric = history_df['amount_in'].copy()
+        fees_percent_numeric = history_df['fees_percent'].copy()
+
         # Formater l'affichage
-        history_df['entry_price'] = history_df['entry_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
-        history_df['amount_in'] = history_df['amount_in'].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
-        history_df['amount_out'] = history_df['amount_out'].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        history_df['entry_price_fmt'] = history_df['entry_price'].apply(lambda x: f"${x:.8f}" if pd.notna(x) else "N/A")
+        history_df['amount_in_fmt'] = history_df['amount_in'].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
         history_df['profit_gross_fmt'] = history_df['profit_gross'].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
         history_df['profit_net_fmt'] = history_df['profit_net'].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
         history_df['fees_fmt'] = history_df['fees_percent'].apply(lambda x: f"-{x:.2f}%" if pd.notna(x) else "N/A")
-        history_df['duration_hours'] = history_df['duration_hours'].apply(lambda x: f"{x:.1f}h" if pd.notna(x) else "N/A")
+        history_df['duration_hours_fmt'] = history_df['duration_hours'].apply(lambda x: f"{x:.1f}h" if pd.notna(x) else "N/A")
 
         # Sélectionner et renommer les colonnes
-        display_df = history_df[['symbol', 'entry_price', 'amount_in', 'profit_gross_fmt', 'fees_fmt', 'profit_net_fmt', 'duration_hours', 'entry_time', 'exit_time']]
+        display_df = history_df[['symbol', 'entry_price_fmt', 'amount_in_fmt', 'profit_gross_fmt', 'fees_fmt', 'profit_net_fmt', 'duration_hours_fmt', 'entry_time', 'exit_time']]
         display_df.columns = ['Symbol', 'Prix Entrée', 'Montant (ETH)', 'P&L Brut', 'Frais', 'P&L Net', 'Durée', 'Entrée', 'Sortie']
 
         st.dataframe(display_df, use_container_width=True)
 
-        # Résumé des frais totaux payés
-        total_fees_eth = (history_df['fees_percent'] * history_df['amount_in'] / 100).sum()
-        st.info(f"💸 **Frais totaux estimés sur ces trades:** {total_fees_eth:.4f} ETH")
+        # Résumé des frais totaux payés (utiliser valeurs numériques)
+        total_fees_eth = (fees_percent_numeric * amount_in_numeric / 100).sum()
+        if pd.notna(total_fees_eth):
+            st.info(f"💸 **Frais totaux estimés sur ces trades:** {total_fees_eth:.4f} ETH")
+        else:
+            st.info(f"💸 **Frais totaux estimés:** N/A")
     else:
         st.info("Aucun historique disponible")
 
