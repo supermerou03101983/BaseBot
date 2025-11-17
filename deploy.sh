@@ -700,6 +700,10 @@ cat > "$CRON_FILE" << 'CRONEOF'
 # Nettoyage des logs journaliers (tous les jours à 1h du matin)
 0 1 * * * find /home/basebot/trading-bot/logs/ -name "*.log" -size +500M -delete 2>/dev/null
 
+# Watchdog anti-freeze (toutes les 15 minutes)
+# Détecte et alerte si le bot est bloqué
+*/15 * * * * /home/basebot/trading-bot/watchdog.py >> /home/basebot/trading-bot/logs/watchdog.log 2>&1
+
 CRONEOF
 
 # Installer les cron jobs pour l'utilisateur basebot
@@ -714,8 +718,82 @@ else
     print_warning "Problème avec la configuration des cron jobs"
 fi
 
+# Rendre le watchdog exécutable
+chmod +x "$BOT_DIR/watchdog.py" 2>/dev/null || true
+print_success "Watchdog anti-freeze configuré"
+
 # =============================================================================
-# 12. Tests de validation
+# 12. Installation des outils de diagnostic et déblocage
+# =============================================================================
+
+print_header "1️⃣2️⃣ Installation des outils de diagnostic"
+
+print_step "Configuration des outils de déblocage..."
+
+# Rendre tous les scripts de diagnostic exécutables
+DIAGNOSTIC_SCRIPTS=(
+    "$BOT_DIR/diagnose_freeze.py"
+    "$BOT_DIR/emergency_close_positions.py"
+    "$BOT_DIR/watchdog.py"
+    "$BOT_DIR/quick_fix.sh"
+    "$BOT_DIR/analyze_trades_simple.py"
+)
+
+FOUND_COUNT=0
+for script in "${DIAGNOSTIC_SCRIPTS[@]}"; do
+    if [ -f "$script" ]; then
+        chmod +x "$script"
+        chown $BOT_USER:$BOT_USER "$script"
+        FOUND_COUNT=$((FOUND_COUNT + 1))
+    fi
+done
+
+if [ $FOUND_COUNT -gt 0 ]; then
+    print_success "$FOUND_COUNT outils de diagnostic installés"
+    print_info "Outils disponibles:"
+    [ -f "$BOT_DIR/diagnose_freeze.py" ] && echo -e "  ${GREEN}•${NC} diagnose_freeze.py - Diagnostic complet du freeze"
+    [ -f "$BOT_DIR/emergency_close_positions.py" ] && echo -e "  ${GREEN}•${NC} emergency_close_positions.py - Fermeture d'urgence"
+    [ -f "$BOT_DIR/watchdog.py" ] && echo -e "  ${GREEN}•${NC} watchdog.py - Surveillance automatique"
+    [ -f "$BOT_DIR/quick_fix.sh" ] && echo -e "  ${GREEN}•${NC} quick_fix.sh - Dépannage rapide"
+    [ -f "$BOT_DIR/analyze_trades_simple.py" ] && echo -e "  ${GREEN}•${NC} analyze_trades_simple.py - Analyse des performances"
+else
+    print_warning "Outils de diagnostic non trouvés (seront disponibles après git pull)"
+fi
+
+# Créer des alias pour faciliter l'usage
+print_step "Création des alias de commande..."
+cat > "$BOT_HOME/.bash_aliases" << 'ALIASEOF'
+# BaseBot Trading - Alias pratiques
+alias bot-status='cd /home/basebot/trading-bot && python3 diagnose_freeze.py'
+alias bot-fix='cd /home/basebot/trading-bot && bash quick_fix.sh'
+alias bot-restart='sudo systemctl restart basebot-trader && echo "Trader redémarré"'
+alias bot-logs='tail -50 /home/basebot/trading-bot/logs/trading.log'
+alias bot-watch='tail -f /home/basebot/trading-bot/logs/trading.log'
+alias bot-scan='sudo journalctl -u basebot-scanner -f'
+alias bot-filter='sudo journalctl -u basebot-filter -f'
+alias bot-trader='sudo journalctl -u basebot-trader -f'
+alias bot-emergency='cd /home/basebot/trading-bot && python3 emergency_close_positions.py'
+alias bot-analyze='cd /home/basebot/trading-bot && python3 analyze_trades_simple.py'
+ALIASEOF
+
+chown $BOT_USER:$BOT_USER "$BOT_HOME/.bash_aliases"
+chmod 644 "$BOT_HOME/.bash_aliases"
+
+# Activer les alias dans .bashrc
+if ! grep -q "\.bash_aliases" "$BOT_HOME/.bashrc" 2>/dev/null; then
+    echo "" >> "$BOT_HOME/.bashrc"
+    echo "# Charger les alias BaseBot" >> "$BOT_HOME/.bashrc"
+    echo "if [ -f ~/.bash_aliases ]; then" >> "$BOT_HOME/.bashrc"
+    echo "    . ~/.bash_aliases" >> "$BOT_HOME/.bashrc"
+    echo "fi" >> "$BOT_HOME/.bashrc"
+fi
+
+print_success "Alias de commande configurés"
+print_info "Tapez 'bot-status' pour diagnostiquer"
+print_info "Tapez 'bot-fix' pour dépannage rapide"
+
+# =============================================================================
+# 13. Tests de validation
 # =============================================================================
 
 print_header "1️⃣2️⃣ Tests de validation"
@@ -795,7 +873,18 @@ echo -e "  ${GREEN}•${NC} Backup quotidien: ${CYAN}2h du matin${NC}"
 echo -e "  ${GREEN}•${NC} Maintenance hebdo: ${CYAN}Dimanche 3h${NC}"
 echo -e "  ${GREEN}•${NC} Maintenance mensuelle: ${CYAN}1er du mois 4h${NC}"
 echo -e "  ${GREEN}•${NC} Nettoyage logs: ${CYAN}Tous les jours 1h${NC}"
+echo -e "  ${GREEN}•${NC} Watchdog anti-freeze: ${CYAN}Toutes les 15 min${NC}"
 echo -e "  ${YELLOW}⚠️${NC}  Aucun service n'est redémarré (trailing stops préservés)"
+echo ""
+
+echo -e "${GREEN}${BOLD}🛡️  Outils de Diagnostic Installés:${NC}"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-status${NC} - Diagnostic complet du freeze"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-fix${NC} - Dépannage rapide"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-emergency${NC} - Fermeture d'urgence des positions"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-restart${NC} - Redémarrer le trader"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-logs${NC} - Voir les 50 dernières lignes"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-watch${NC} - Suivre les logs en temps réel"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-analyze${NC} - Analyser les performances de trading"
 echo ""
 
 echo -e "${CYAN}📊 Dashboard:${NC}"
@@ -870,7 +959,30 @@ BASE TRADING BOT - GUIDE RAPIDE
   Status:    ./status.sh (dans $BOT_DIR)
   Backup:    ./maintenance_monthly.sh
 
+🛡️ OUTILS DE DIAGNOSTIC (Commandes rapides)
+  bot-status     - Diagnostic complet du freeze
+  bot-fix        - Dépannage rapide
+  bot-restart    - Redémarrer le trader
+  bot-logs       - Voir les derniers logs
+  bot-watch      - Suivre les logs en direct
+  bot-emergency  - Fermeture d'urgence des positions
+  bot-analyze    - Analyser les performances
+
+🔍 SCRIPTS DE DIAGNOSTIC
+  Freeze:        python3 diagnose_freeze.py
+  Quick Fix:     bash quick_fix.sh
+  Emergency:     python3 emergency_close_positions.py
+  Watchdog:      python3 watchdog.py
+  Analyse:       python3 analyze_trades_simple.py
+
+⏰ TÂCHES AUTOMATIQUES
+  - Backup quotidien: 2h du matin
+  - Maintenance hebdo: Dimanche 3h
+  - Maintenance mensuelle: 1er du mois 4h
+  - Watchdog anti-freeze: Toutes les 15 minutes
+
 📖 DOCUMENTATION
+  Guide freeze: $BOT_DIR/TROUBLESHOOTING_FREEZE.md
   Voir: $BOT_DIR/README.md (si disponible)
 
 ====================================
