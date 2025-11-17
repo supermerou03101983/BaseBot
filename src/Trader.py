@@ -78,6 +78,10 @@ class RealTrader:
         self.load_positions()
         self.daily_trades = 0
         self.last_trade_day = None
+
+        # Cooldown pour tokens rejetés (éviter boucles infinies)
+        self.rejected_tokens_cooldown = {}  # {token_address: timestamp}
+        self.cooldown_minutes = int(os.getenv('REJECTED_TOKEN_COOLDOWN_MINUTES', 30))
         
         # Router ABI pour Uniswap V3
         self.router_abi = json.loads('''[
@@ -263,7 +267,41 @@ class RealTrader:
                 
         if loaded_count > 0:
             self.logger.info(f"✅ {loaded_count} positions recuperees")
-    
+
+    def is_token_in_cooldown(self, token_address: str) -> bool:
+        """Vérifie si un token est en cooldown (rejeté récemment)"""
+        if token_address not in self.rejected_tokens_cooldown:
+            return False
+
+        cooldown_time = self.rejected_tokens_cooldown[token_address]
+        elapsed_minutes = (datetime.now() - cooldown_time).total_seconds() / 60
+
+        if elapsed_minutes < self.cooldown_minutes:
+            return True
+        else:
+            # Cooldown expiré, on peut le retirer
+            del self.rejected_tokens_cooldown[token_address]
+            return False
+
+    def add_token_to_cooldown(self, token_address: str, symbol: str, reason: str):
+        """Ajoute un token au cooldown après rejet"""
+        self.rejected_tokens_cooldown[token_address] = datetime.now()
+        self.logger.warning(
+            f"⏸️  {symbol} ajouté au cooldown ({self.cooldown_minutes} min) - Raison: {reason}"
+        )
+
+    def cleanup_expired_cooldowns(self):
+        """Nettoie les cooldowns expirés (appelé périodiquement)"""
+        expired = [
+            addr for addr, timestamp in self.rejected_tokens_cooldown.items()
+            if (datetime.now() - timestamp).total_seconds() / 60 >= self.cooldown_minutes
+        ]
+        for addr in expired:
+            del self.rejected_tokens_cooldown[addr]
+
+        if expired:
+            self.logger.info(f"🧹 {len(expired)} cooldowns expirés nettoyés")
+
     def get_next_token(self) -> Optional[Dict]:
         """
         Recupere le prochain token a trader avec priorisation par momentum
@@ -326,6 +364,13 @@ class RealTrader:
                     'volume_24h': row[7] or 0,
                     'created_at': row[8]
                 }
+
+                # SKIP tokens en cooldown (rejetés récemment)
+                if self.is_token_in_cooldown(token_data['address']):
+                    self.logger.info(
+                        f"⏸️  {token_data['symbol']} ignoré (en cooldown après rejet récent)"
+                    )
+                    continue
 
                 # Obtenir données fraîches pour momentum
                 dex_data = self.dexscreener.get_token_info(token_data['address'])
@@ -661,6 +706,8 @@ class RealTrader:
             self.logger.warning(
                 f"❌ Token {token['symbol']} rejeté à la re-validation: {reason}"
             )
+            # Ajouter au cooldown pour éviter boucle infinie
+            self.add_token_to_cooldown(token['address'], token['symbol'], reason)
             return False
 
         # Utiliser le prix FRAIS (pas celui de la DB qui peut être vieux de 48h!)
@@ -1319,8 +1366,9 @@ class RealTrader:
                     # Log performance toutes les heures
                     if time.time() - last_performance_log > 3600:
                         self.log_performance_metrics()
+                        self.cleanup_expired_cooldowns()  # Nettoyer cooldowns expirés
                         last_performance_log = time.time()
-                        
+
                     # Pause de 1 seconde (monitoring rapide)
                     time.sleep(self.monitoring_interval)
                     
