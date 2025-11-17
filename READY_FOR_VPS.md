@@ -5,6 +5,7 @@
 **Repository:** https://github.com/supermerou03101983/BaseBot
 
 **Dernier commit:**
+- 🔧 Fix boucle infinie sur token rejeté (cooldown system)
 - 🛡️ Système anti-freeze et monitoring automatique
 - 📊 Outils d'analyse de performance
 - 🚨 Scripts de déblocage d'urgence
@@ -29,7 +30,15 @@ curl -s https://raw.githubusercontent.com/supermerou03101983/BaseBot/main/deploy
 
 ---
 
-## 📋 CE QUI A ÉTÉ INTÉGRÉ AUJOURD'HUI
+## 📋 CE QUI A ÉTÉ INTÉGRÉ
+
+### **FIX CRITIQUE - 2025-11-17:**
+
+**Problème résolu:** Boucle infinie sur token rejeté
+- Bot bloqué sur ORACLE token (re-validation échoue en boucle)
+- CPU 100%, positions ignorées, apparence de "freeze"
+- **Solution:** Système de cooldown 30 min pour tokens rejetés
+- Voir détails: [FIX_INFINITE_LOOP.md](FIX_INFINITE_LOOP.md)
 
 ### **Fichiers ajoutés au repo:**
 
@@ -116,6 +125,9 @@ curl -s https://raw.githubusercontent.com/supermerou03101983/BaseBot/main/deploy
    Remplir au minimum:
    - `WALLET_ADDRESS`
    - `PRIVATE_KEY`
+
+   Optionnel (cooldown system):
+   - `REJECTED_TOKEN_COOLDOWN_MINUTES=30` (défaut: 30 min)
 
 3. **Démarrer les services:**
    ```bash
