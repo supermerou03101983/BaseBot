@@ -13,6 +13,11 @@ from datetime import datetime, timedelta
 from pathlib import Path
 import json
 import time
+import os
+from dotenv import load_dotenv
+
+# Charger .env pour récupérer les frais configurés
+load_dotenv(Path(__file__).parent.parent / 'config' / '.env')
 
 # Configuration
 st.set_page_config(
@@ -43,6 +48,68 @@ def set_trading_mode(mode):
     CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
     with open(CONFIG_PATH, 'w') as f:
         json.dump({'mode': mode, 'updated_at': datetime.now().isoformat()}, f)
+
+def calculate_trading_fees(amount_eth, slippage_percent=3):
+    """
+    Calcule les frais totaux de trading
+
+    Frais sur Base Network:
+    - Uniswap V3 swap fee: 0.3% par swap (0.6% total pour buy+sell)
+    - Gas fees: ~0.0001-0.0003 ETH par transaction sur Base
+    - Slippage: Variable (3% max configuré)
+
+    Returns: dict avec détails des frais
+    """
+    # Frais Uniswap V3 (0.3% par swap, buy + sell = 0.6%)
+    uniswap_fee_buy = amount_eth * 0.003
+    uniswap_fee_sell = amount_eth * 0.003
+    total_uniswap_fees = uniswap_fee_buy + uniswap_fee_sell
+
+    # Gas fees sur Base (très bas, estimé à 0.0002 ETH par tx)
+    gas_fee_per_tx = 0.0002
+    total_gas_fees = gas_fee_per_tx * 2  # Buy + Sell
+
+    # Slippage moyen estimé (on utilise la moitié du max pour être réaliste)
+    avg_slippage_percent = slippage_percent / 2
+    slippage_cost = amount_eth * (avg_slippage_percent / 100) * 2  # Buy + Sell
+
+    # Total des frais
+    total_fees_eth = total_uniswap_fees + total_gas_fees + slippage_cost
+    total_fees_percent = (total_fees_eth / amount_eth) * 100
+
+    return {
+        'uniswap_fees_eth': total_uniswap_fees,
+        'gas_fees_eth': total_gas_fees,
+        'slippage_eth': slippage_cost,
+        'total_fees_eth': total_fees_eth,
+        'total_fees_percent': total_fees_percent,
+        'uniswap_percent': 0.6,
+        'slippage_percent': avg_slippage_percent * 2
+    }
+
+def calculate_net_profit(gross_profit_percent, amount_eth, slippage_percent=3):
+    """
+    Calcule le profit net après déduction de tous les frais
+
+    Args:
+        gross_profit_percent: Profit brut en %
+        amount_eth: Montant de la position en ETH
+        slippage_percent: Slippage max configuré (défaut 3%)
+
+    Returns:
+        dict avec profit brut, frais, et profit net
+    """
+    fees = calculate_trading_fees(amount_eth, slippage_percent)
+
+    # Profit net = Profit brut - Frais totaux (en %)
+    net_profit_percent = gross_profit_percent - fees['total_fees_percent']
+
+    return {
+        'gross_profit_percent': gross_profit_percent,
+        'fees_percent': fees['total_fees_percent'],
+        'net_profit_percent': net_profit_percent,
+        'fees_breakdown': fees
+    }
 
 # Titre principal
 st.title("🤖 Base Trading Bot")
@@ -183,13 +250,27 @@ with tab1:
 
 with tab2:
     st.header("Performance")
-    
-    # Graphique des profits par jour (positions fermées uniquement)
+
+    # Récupérer slippage depuis config
+    slippage_percent = float(os.getenv('MAX_SLIPPAGE_PERCENT', 3))
+    position_size_eth = float(os.getenv('POSITION_SIZE_PERCENT', 15)) / 100  # Convertir en fraction
+
+    # Afficher info sur les frais
+    st.info(f"""
+    💡 **Frais de trading intégrés dans les calculs:**
+    - Uniswap V3: 0.6% (0.3% par swap)
+    - Gas Base: ~0.0004 ETH par round-trip
+    - Slippage moyen estimé: {slippage_percent}% ({slippage_percent/2}% par swap)
+    - **Total frais estimés: ~{slippage_percent + 0.6:.1f}% par trade**
+    """)
+
+    # Graphique des profits par jour avec BRUT et NET
     profits_df = pd.read_sql_query("""
         SELECT
             DATE(exit_time) as date,
-            AVG(profit_loss) as avg_profit,
-            COUNT(*) as trades
+            AVG(profit_loss) as avg_profit_gross,
+            COUNT(*) as trades,
+            AVG(amount_in) as avg_amount_eth
         FROM trade_history
         WHERE exit_time IS NOT NULL AND profit_loss IS NOT NULL
         GROUP BY DATE(exit_time)
@@ -198,39 +279,123 @@ with tab2:
     """, conn)
     
     if not profits_df.empty:
+        # Calculer profit NET pour chaque jour
+        profits_df['avg_profit_net'] = profits_df.apply(
+            lambda row: calculate_net_profit(
+                row['avg_profit_gross'],
+                row['avg_amount_eth'] if pd.notna(row['avg_amount_eth']) else 0.15,
+                slippage_percent
+            )['net_profit_percent'],
+            axis=1
+        )
+
         fig = go.Figure()
+        # Profit BRUT
         fig.add_trace(go.Bar(
             x=profits_df['date'],
-            y=profits_df['avg_profit'],
-            name='Profit moyen %',
-            marker_color=['green' if x > 0 else 'red' for x in profits_df['avg_profit']]
+            y=profits_df['avg_profit_gross'],
+            name='Profit Brut %',
+            marker_color='lightblue',
+            opacity=0.6
         ))
-        fig.update_layout(title="Performance Quotidienne", height=400)
+        # Profit NET
+        fig.add_trace(go.Bar(
+            x=profits_df['date'],
+            y=profits_df['avg_profit_net'],
+            name='Profit Net % (après frais)',
+            marker_color=['green' if x > 0 else 'red' for x in profits_df['avg_profit_net']]
+        ))
+        fig.update_layout(
+            title="Performance Quotidienne (Brut vs Net)",
+            height=400,
+            barmode='group',
+            legend=dict(yanchor="top", y=0.99, xanchor="left", x=0.01)
+        )
         st.plotly_chart(fig, use_container_width=True)
     
-    # Statistiques globales
-    col1, col2, col3 = st.columns(3)
-    
+    # Statistiques globales avec BRUT et NET
+    st.subheader("📊 Statistiques Globales")
+
+    col1, col2, col3, col4 = st.columns(4)
+
     stats = pd.read_sql_query("""
         SELECT
             COUNT(*) as total_trades,
             COUNT(CASE WHEN profit_loss > 0 THEN 1 END) as winning_trades,
-            AVG(profit_loss) as avg_profit,
+            AVG(profit_loss) as avg_profit_gross,
             MAX(profit_loss) as best_trade,
-            MIN(profit_loss) as worst_trade
+            MIN(profit_loss) as worst_trade,
+            AVG(amount_in) as avg_amount_eth
         FROM trade_history
         WHERE exit_time IS NOT NULL
     """, conn)
-    
+
     if not stats.empty and stats.iloc[0]['total_trades'] > 0:
         row = stats.iloc[0]
+
+        # Calculer profit NET moyen
+        avg_amount = row['avg_amount_eth'] if pd.notna(row['avg_amount_eth']) else 0.15
+        net_profit_data = calculate_net_profit(row['avg_profit_gross'], avg_amount, slippage_percent)
+
+        # Calculer win rate NET (en tenant compte des frais)
+        net_winning_trades_query = f"""
+            SELECT COUNT(*) as net_winners
+            FROM trade_history
+            WHERE exit_time IS NOT NULL
+            AND profit_loss > {net_profit_data['fees_percent']}
+        """
+        net_winners = pd.read_sql_query(net_winning_trades_query, conn).iloc[0]['net_winners']
+        net_win_rate = (net_winners / row['total_trades'] * 100)
+
         with col1:
-            win_rate = (row['winning_trades'] / row['total_trades'] * 100)
-            st.metric("Win Rate", f"{win_rate:.1f}%")
+            win_rate_gross = (row['winning_trades'] / row['total_trades'] * 100)
+            st.metric(
+                "Win Rate Brut",
+                f"{win_rate_gross:.1f}%",
+                help="Trades gagnants avant frais"
+            )
+
         with col2:
-            st.metric("Profit Moyen", f"{row['avg_profit']:.2f}%")
+            st.metric(
+                "Win Rate Net",
+                f"{net_win_rate:.1f}%",
+                delta=f"{net_win_rate - win_rate_gross:.1f}%",
+                help="Trades gagnants après frais de trading"
+            )
+
         with col3:
-            st.metric("Meilleur Trade", f"+{row['best_trade']:.1f}%")
+            st.metric(
+                "Profit Moyen Brut",
+                f"{row['avg_profit_gross']:.2f}%",
+                help="Avant frais de trading"
+            )
+
+        with col4:
+            st.metric(
+                "Profit Moyen Net",
+                f"{net_profit_data['net_profit_percent']:.2f}%",
+                delta=f"{net_profit_data['net_profit_percent'] - row['avg_profit_gross']:.2f}%",
+                delta_color="inverse",
+                help=f"Après {net_profit_data['fees_percent']:.2f}% de frais"
+            )
+
+    # Détail des frais estimés
+    st.subheader("💰 Détail des Frais de Trading (Estimation)")
+
+    col1, col2, col3, col4 = st.columns(4)
+
+    # Utiliser la taille de position moyenne
+    avg_position_size = stats.iloc[0]['avg_amount_eth'] if not stats.empty and pd.notna(stats.iloc[0]['avg_amount_eth']) else 0.15
+    fees_detail = calculate_trading_fees(avg_position_size, slippage_percent)
+
+    with col1:
+        st.metric("Frais Uniswap V3", f"{fees_detail['uniswap_percent']:.2f}%")
+    with col2:
+        st.metric("Slippage Moyen", f"{fees_detail['slippage_percent']:.2f}%")
+    with col3:
+        st.metric("Gas Fees", f"{fees_detail['gas_fees_eth']:.4f} ETH")
+    with col4:
+        st.metric("Total Frais", f"{fees_detail['total_fees_percent']:.2f}%")
 
 with tab3:
     st.header("Tokens Approuvés en Attente")
@@ -261,14 +426,14 @@ with tab3:
 with tab4:
     st.header("Historique des Trades")
 
-    # Afficher les derniers trades (fermés uniquement)
+    # Afficher les derniers trades (fermés uniquement) avec profit NET
     history_df = pd.read_sql_query("""
         SELECT
             symbol,
             price as entry_price,
             amount_in,
             amount_out,
-            profit_loss,
+            profit_loss as profit_gross,
             entry_time,
             exit_time,
             ROUND((JULIANDAY(exit_time) - JULIANDAY(entry_time)) * 24, 1) as duration_hours
@@ -279,14 +444,43 @@ with tab4:
     """, conn)
 
     if not history_df.empty:
+        # Calculer profit NET pour chaque trade
+        history_df['profit_net'] = history_df.apply(
+            lambda row: calculate_net_profit(
+                row['profit_gross'] if pd.notna(row['profit_gross']) else 0,
+                row['amount_in'] if pd.notna(row['amount_in']) else 0.15,
+                slippage_percent
+            )['net_profit_percent'],
+            axis=1
+        )
+
+        # Calculer les frais pour chaque trade
+        history_df['fees_percent'] = history_df.apply(
+            lambda row: calculate_trading_fees(
+                row['amount_in'] if pd.notna(row['amount_in']) else 0.15,
+                slippage_percent
+            )['total_fees_percent'],
+            axis=1
+        )
+
         # Formater l'affichage
         history_df['entry_price'] = history_df['entry_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
-        history_df['profit_loss'] = history_df['profit_loss'].apply(lambda x: f"{x:.2f}%" if x else "N/A")
-        history_df['amount_in'] = history_df['amount_in'].apply(lambda x: f"{x:.4f}" if x else "N/A")
-        history_df['amount_out'] = history_df['amount_out'].apply(lambda x: f"{x:.4f}" if x else "N/A")
-        history_df['duration_hours'] = history_df['duration_hours'].apply(lambda x: f"{x:.1f}h" if x else "N/A")
-        history_df.columns = ['Symbol', 'Prix Entrée', 'In (ETH)', 'Out (ETH)', 'P&L', 'Entrée', 'Sortie', 'Durée']
-        st.dataframe(history_df, use_container_width=True)
+        history_df['amount_in'] = history_df['amount_in'].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        history_df['amount_out'] = history_df['amount_out'].apply(lambda x: f"{x:.4f}" if pd.notna(x) else "N/A")
+        history_df['profit_gross_fmt'] = history_df['profit_gross'].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
+        history_df['profit_net_fmt'] = history_df['profit_net'].apply(lambda x: f"{x:.2f}%" if pd.notna(x) else "N/A")
+        history_df['fees_fmt'] = history_df['fees_percent'].apply(lambda x: f"-{x:.2f}%" if pd.notna(x) else "N/A")
+        history_df['duration_hours'] = history_df['duration_hours'].apply(lambda x: f"{x:.1f}h" if pd.notna(x) else "N/A")
+
+        # Sélectionner et renommer les colonnes
+        display_df = history_df[['symbol', 'entry_price', 'amount_in', 'profit_gross_fmt', 'fees_fmt', 'profit_net_fmt', 'duration_hours', 'entry_time', 'exit_time']]
+        display_df.columns = ['Symbol', 'Prix Entrée', 'Montant (ETH)', 'P&L Brut', 'Frais', 'P&L Net', 'Durée', 'Entrée', 'Sortie']
+
+        st.dataframe(display_df, use_container_width=True)
+
+        # Résumé des frais totaux payés
+        total_fees_eth = (history_df['fees_percent'] * history_df['amount_in'] / 100).sum()
+        st.info(f"💸 **Frais totaux estimés sur ces trades:** {total_fees_eth:.4f} ETH")
     else:
         st.info("Aucun historique disponible")
 
