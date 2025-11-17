@@ -4,7 +4,8 @@
 
 **Repository:** https://github.com/supermerou03101983/BaseBot
 
-**Dernier commit:**
+**Dernier commit (branche main - tout intégré):**
+- 🛡️ Grace Period Stop Loss (3 min @ -35%, puis -5%)
 - 🔧 Fix boucle infinie sur token rejeté (cooldown system)
 - 🛡️ Système anti-freeze et monitoring automatique
 - 📊 Outils d'analyse de performance
@@ -32,9 +33,15 @@ curl -s https://raw.githubusercontent.com/supermerou03101983/BaseBot/main/deploy
 
 ## 📋 CE QUI A ÉTÉ INTÉGRÉ
 
-### **FIX CRITIQUE - 2025-11-17:**
+### **NOUVEAUTÉS - 2025-11-17:**
 
-**Problème résolu:** Boucle infinie sur token rejeté
+**1. Grace Period Stop Loss**
+- 3 minutes de grace period avec stop loss élargi à -35%
+- Après 3 min: stop loss normal à -5%
+- Réduit les sorties prématurées sur slippage/volatilité
+- Voir détails: [FEATURE_GRACE_PERIOD.md](FEATURE_GRACE_PERIOD.md)
+
+**2. Fix Boucle Infinie**
 - Bot bloqué sur ORACLE token (re-validation échoue en boucle)
 - CPU 100%, positions ignorées, apparence de "freeze"
 - **Solution:** Système de cooldown 30 min pour tokens rejetés
