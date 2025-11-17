@@ -31,7 +31,7 @@ load_dotenv(PROJECT_DIR / 'config' / '.env')
 
 class Position:
     """Represente une position ouverte avec gestion avancee"""
-    def __init__(self, token_address: str, symbol: str, entry_price: float, 
+    def __init__(self, token_address: str, symbol: str, entry_price: float,
                  amount: float, amount_eth: float):
         self.token_address = token_address
         self.symbol = symbol
@@ -46,6 +46,31 @@ class Position:
         self.trailing_config = None
         self.trailing_active = False
         self.highest_price = entry_price
+
+        # Grace period: 3 minutes avec stop loss élargi
+        self.grace_period_minutes = 3
+        self.grace_period_stop_loss_percent = 35  # -35% pendant grace period
+        self.normal_stop_loss_percent = 5  # -5% après grace period
+        self.grace_period_active = True
+
+    def get_active_stop_loss_percent(self):
+        """Retourne le stop loss actif selon le grace period"""
+        time_since_entry = (datetime.now() - self.entry_time).total_seconds() / 60  # en minutes
+
+        if time_since_entry < self.grace_period_minutes:
+            # Pendant le grace period: stop loss élargi
+            return self.grace_period_stop_loss_percent
+        else:
+            # Après le grace period: stop loss normal
+            if self.grace_period_active:
+                # Première fois qu'on sort du grace period
+                self.grace_period_active = False
+            return self.normal_stop_loss_percent
+
+    def is_in_grace_period(self):
+        """Vérifie si la position est encore dans le grace period"""
+        time_since_entry = (datetime.now() - self.entry_time).total_seconds() / 60
+        return time_since_entry < self.grace_period_minutes
 
 class RealTrader:
     def __init__(self):
@@ -685,6 +710,12 @@ class RealTrader:
                 )
                 position.trailing_config = self.trailing_config
 
+                # Log du grace period activé
+                self.logger.info(
+                    f"🛡️ Grace period activé pour {token['symbol']}: "
+                    f"3 minutes avec stop loss à -35% (puis -5%)"
+                )
+
                 self.positions[token['address']] = position
                 self.save_position_state(position)
 
@@ -798,7 +829,13 @@ class RealTrader:
                         position_size_eth
                     )
                     position.trailing_config = self.trailing_config
-                    
+
+                    # Log du grace period activé
+                    self.logger.info(
+                        f"🛡️ Grace period activé pour {token['symbol']}: "
+                        f"3 minutes avec stop loss à -35% (puis -5%)"
+                    )
+
                     self.positions[token['address']] = position
                     self.save_position_state(position)
                     
@@ -1070,20 +1107,37 @@ class RealTrader:
                         continue
                         
                     # Calculer le profit actuel
-                    profit_percent = ((position.current_price - position.entry_price) / 
+                    profit_percent = ((position.current_price - position.entry_price) /
                                     position.entry_price) * 100
-                    
+
                     # 1. Verifier TIME EXIT
                     should_exit, exit_reason = self.check_time_exit(position)
                     if should_exit:
                         self.logger.info(f"⏱️ Time exit: {exit_reason}")
                         self.execute_sell(position, exit_reason)
                         continue
-                    
-                    # 2. Verifier STOP LOSS fixe (-5%)
-                    if profit_percent <= -self.stop_loss_percent:
-                        self.logger.info(f"🛑 Stop Loss: {profit_percent:.1f}%")
-                        self.execute_sell(position, f"Stop Loss ({profit_percent:.1f}%)")
+
+                    # 2. Verifier STOP LOSS avec GRACE PERIOD
+                    active_stop_loss = position.get_active_stop_loss_percent()
+
+                    # Log si transition du grace period
+                    if hasattr(position, 'grace_period_active') and position.grace_period_active:
+                        time_in_position = (datetime.now() - position.entry_time).total_seconds() / 60
+                        if time_in_position >= position.grace_period_minutes:
+                            self.logger.info(
+                                f"⏰ {position.symbol} - Grace period terminé "
+                                f"(3 min écoulées) - Stop loss activé à -5%"
+                            )
+                            position.grace_period_active = False
+
+                    if profit_percent <= -active_stop_loss:
+                        in_grace = position.is_in_grace_period() if hasattr(position, 'is_in_grace_period') else False
+                        grace_status = " (Grace Period)" if in_grace else ""
+                        self.logger.info(
+                            f"🛑 Stop Loss{grace_status}: {profit_percent:.1f}% "
+                            f"(seuil: -{active_stop_loss:.0f}%)"
+                        )
+                        self.execute_sell(position, f"Stop Loss ({profit_percent:.1f}%){grace_status}")
                         continue
                     
                     # 3. Mettre a jour TRAILING STOP
@@ -1259,16 +1313,28 @@ class RealTrader:
                         if monitoring_counter >= 10:
                             for addr, pos in self.positions.items():
                                 if pos.entry_price > 0:
-                                    profit = ((pos.current_price - pos.entry_price) / 
+                                    profit = ((pos.current_price - pos.entry_price) /
                                             pos.entry_price) * 100
                                     hours = (datetime.now() - pos.entry_time).total_seconds() / 3600
-                                    
-                                    status = "📈 Trailing" if pos.trailing_active else "⏳ Attente"
+                                    minutes = hours * 60
+
+                                    # Déterminer le statut avec grace period
+                                    if hasattr(pos, 'is_in_grace_period') and pos.is_in_grace_period():
+                                        time_left = pos.grace_period_minutes - minutes
+                                        status = f"🛡️ Grace ({time_left:.1f}min)"
+                                        stop_info = f"SL: -35%"
+                                    elif pos.trailing_active:
+                                        status = "📈 Trailing"
+                                        stop_info = f"Stop: ${pos.stop_loss:.8f}"
+                                    else:
+                                        status = "⏳ Attente"
+                                        stop_info = f"SL: -5%"
+
                                     self.logger.info(
                                         f"{status} {pos.symbol}: "
-                                        f"+{profit:.1f}% | "
+                                        f"{profit:+.1f}% | "
                                         f"{hours:.1f}h | "
-                                        f"Stop: ${pos.stop_loss:.8f}"
+                                        f"{stop_info}"
                                     )
                             monitoring_counter = 0
                     
