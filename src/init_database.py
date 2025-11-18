@@ -40,6 +40,7 @@ def init_database():
     ''')
     
     # Table discovered_tokens (schéma aligné avec Scanner.py et Filter.py)
+    # ✅ SCHEMA UNIFIÉ avec pair_created_at (date blockchain) et discovered_at (date découverte)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS discovered_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -53,7 +54,8 @@ def init_database():
             volume_24h REAL DEFAULT 0,
             price_usd REAL DEFAULT 0,
             price_eth REAL DEFAULT 0,
-            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            pair_created_at TIMESTAMP,
+            discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
     
@@ -180,7 +182,8 @@ def init_database():
     
     # Index pour performance optimale
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_address ON discovered_tokens(token_address)')
-    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_created ON discovered_tokens(created_at DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_created ON discovered_tokens(discovered_at DESC)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_pair_created ON discovered_tokens(pair_created_at DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_approved_address ON approved_tokens(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_rejected_address ON rejected_tokens(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_token ON trade_history(token_address)')

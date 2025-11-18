@@ -83,6 +83,7 @@ class AdvancedFilter:
         cursor = conn.cursor()
 
         # Table des tokens découverts (partagée avec Scanner)
+        # ✅ SCHEMA UNIFIÉ avec pair_created_at (date blockchain) et discovered_at (date découverte)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS discovered_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -93,9 +94,11 @@ class AdvancedFilter:
                 total_supply TEXT,
                 liquidity REAL,
                 market_cap REAL,
+                volume_24h REAL,
                 price_usd REAL,
                 price_eth REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                pair_created_at TIMESTAMP,
+                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
