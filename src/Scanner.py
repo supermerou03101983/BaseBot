@@ -84,9 +84,11 @@ class EnhancedScanner:
                 total_supply TEXT,
                 liquidity REAL,
                 market_cap REAL,
+                volume_24h REAL,
                 price_usd REAL,
                 price_eth REAL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                pair_created_at TIMESTAMP,
+                discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
@@ -237,12 +239,23 @@ class EnhancedScanner:
                 market_cap = pair_data.get('market_cap', 0) if pair_data else 0
                 volume_24h = pair_data.get('volume_24h', 0) if pair_data else 0
 
+                # Convertir pairCreatedAt (timestamp ms) en datetime string
+                pair_created_at = pair_data.get('pairCreatedAt') if pair_data else None
+                pair_created_at_str = None
+                if pair_created_at:
+                    from datetime import datetime
+                    try:
+                        dt = datetime.fromtimestamp(pair_created_at / 1000)
+                        pair_created_at_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+                    except:
+                        pass
+
                 # Insérer dans la base de données
                 cursor.execute('''
                     INSERT OR IGNORE INTO discovered_tokens
-                    (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth))
+                    (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth, pair_created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth, pair_created_at_str))
 
                 self.logger.info(f"✅ Token découvert: {symbol} ({token_address}) - MC: ${market_cap:.2f}")
                 added += 1

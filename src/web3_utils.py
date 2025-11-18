@@ -409,7 +409,8 @@ class DexScreenerAPI:
                 'market_cap': float(pair.get('marketCap', 0)),
                 'pair_address': pair.get('pairAddress'),
                 'dex_id': pair.get('dexId'),
-                'chain_id': pair.get('chainId')
+                'chain_id': pair.get('chainId'),
+                'pairCreatedAt': pair.get('pairCreatedAt')  # Date de création du pair (timestamp ms)
             }
         except Exception as e:
             print(f"Erreur parsing pair data: {e}")

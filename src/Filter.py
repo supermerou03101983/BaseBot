@@ -253,17 +253,18 @@ class AdvancedFilter:
         reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
 
         # Age (si disponible) - Doit avoir AU MOINS min_age_hours
-        created_at = token_data.get('created_at')
-        if created_at:
+        # ✅ FIX: Utiliser pair_created_at (date blockchain) au lieu de created_at (date découverte)
+        pair_created_at = token_data.get('pair_created_at')
+        if pair_created_at:
             try:
                 from datetime import timezone
                 # Parser le format "2025-11-09 11:51:36"
-                if 'T' in created_at:
+                if 'T' in pair_created_at:
                     # Format ISO avec T
-                    token_creation_date = datetime.fromisoformat(created_at.replace('Z', '+00:00'))
+                    token_creation_date = datetime.fromisoformat(pair_created_at.replace('Z', '+00:00'))
                 else:
                     # Format "YYYY-MM-DD HH:MM:SS"
-                    token_creation_date = datetime.strptime(created_at, '%Y-%m-%d %H:%M:%S')
+                    token_creation_date = datetime.strptime(pair_created_at, '%Y-%m-%d %H:%M:%S')
                     token_creation_date = token_creation_date.replace(tzinfo=timezone.utc)
 
                 age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
