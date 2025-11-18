@@ -232,13 +232,24 @@ class AdvancedFilter:
         else:
             reasons.append(f"MC (${mc:,.2f}) > max (${self.max_market_cap:,.2f})")
 
-        # Liquidity
+        # Liquidity (avec MAX_LIQUIDITY)
         liquidity = token_data.get('liquidity', 0)
-        if liquidity >= self.min_liquidity:
+        if self.min_liquidity <= liquidity <= self.max_liquidity:
             score += 15
             reasons.append(f"Liquidity (${liquidity:,.2f}) OK")
-        else:
+        elif liquidity < self.min_liquidity:
             reasons.append(f"Liquidity (${liquidity:,.2f}) < min (${self.min_liquidity:,.2f})")
+        else:
+            reasons.append(f"Liquidity (${liquidity:,.2f}) > max (${self.max_liquidity:,.2f})")
+
+        # Volume 24h (CRITIQUE - Fix #1)
+        volume_24h = token_data.get('volume_24h', 0)
+        if volume_24h >= self.min_volume_24h:
+            score += 10
+            reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
+        else:
+            reasons.append(f"❌ Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f})")
+            # Ne pas ajouter de points si volume insuffisant
 
         # Age (si disponible) - Doit avoir AU MOINS min_age_hours
         created_at = token_data.get('created_at')
@@ -264,20 +275,19 @@ class AdvancedFilter:
             except Exception as e:
                 reasons.append(f"Age non vérifié (erreur: {str(e)[:50]})")
 
-        # Holders (si disponible via BaseScan ou autre)
-        # ⚠️ TEMPORAIREMENT DÉSACTIVÉ: L'API Base retourne toujours 0
-        # TODO: Réactiver quand l'API Etherscan Base fonctionnera
+        # Holders (STRICT - Fix #2)
+        # ⚠️ Si holder_count = 0 ou absent, on REJETTE au lieu de donner un bonus
         holders = token_data.get('holder_count', 0)
-        if holders > 0:  # Seulement si on a une vraie valeur
-            if holders >= self.min_holders:
-                score += 10
-                reasons.append(f"Holders ({holders}) OK")
-            else:
-                reasons.append(f"Holders ({holders}) < min ({self.min_holders})")
+        if holders == 0:
+            reasons.append(f"❌ REJET: Nombre de holders inconnu (API échec)")
+            return 0, reasons  # Rejet automatique - trop risqué
+
+        if holders >= self.min_holders:
+            score += 10
+            reasons.append(f"Holders ({holders}) OK")
         else:
-            # Ne pas pénaliser si API ne fonctionne pas
-            score += 5  # Bonus partiel par défaut
-            reasons.append(f"Holders non disponible (API Base)")
+            reasons.append(f"❌ REJET: Holders ({holders}) < min ({self.min_holders})")
+            return 0, reasons  # Rejet automatique si holders insuffisants
 
         # Owner percentage (si disponible via BaseScan)
         # ⚠️ TEMPORAIREMENT DÉSACTIVÉ: L'API Base retourne toujours 100%
@@ -294,14 +304,21 @@ class AdvancedFilter:
             score += 7  # Bonus partiel par défaut
             reasons.append(f"Owner % non disponible (API Base)")
 
-        # Taxes (si disponibles via BaseScan ou analyse du contrat)
-        buy_tax = token_data.get('buy_tax', 0.0) # Cette donnée doit être récupérée ailleurs
-        sell_tax = token_data.get('sell_tax', 0.0) # Cette donnée doit être récupérée ailleurs
+        # Taxes (STRICT - Fix #3)
+        # ⚠️ Si taxes inconnues (None), on REJETTE au lieu d'assumer 0%
+        buy_tax = token_data.get('buy_tax', None)
+        sell_tax = token_data.get('sell_tax', None)
+
+        if buy_tax is None or sell_tax is None:
+            reasons.append(f"❌ REJET: Taxes inconnues (API échec)")
+            return 0, reasons  # Rejet automatique - trop risqué
+
         if buy_tax <= self.max_buy_tax and sell_tax <= self.max_sell_tax:
             score += 15
             reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) OK")
         else:
-            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max (B:{self.max_buy_tax:.2f}%, S:{self.max_sell_tax:.2f}%)")
+            reasons.append(f"❌ REJET: Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max (B:{self.max_buy_tax:.2f}%, S:{self.max_sell_tax:.2f}%)")
+            return 0, reasons  # Rejet automatique si taxes trop élevées
 
         # Données on-chain (détails du contrat, honeypot, etc.) - via web3_utils
         try:
