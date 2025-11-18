@@ -737,6 +737,7 @@ DIAGNOSTIC_SCRIPTS=(
     "$BOT_DIR/watchdog.py"
     "$BOT_DIR/quick_fix.sh"
     "$BOT_DIR/analyze_trades_simple.py"
+    "$BOT_DIR/analyze_results.py"
 )
 
 FOUND_COUNT=0
@@ -755,7 +756,8 @@ if [ $FOUND_COUNT -gt 0 ]; then
     [ -f "$BOT_DIR/emergency_close_positions.py" ] && echo -e "  ${GREEN}•${NC} emergency_close_positions.py - Fermeture d'urgence"
     [ -f "$BOT_DIR/watchdog.py" ] && echo -e "  ${GREEN}•${NC} watchdog.py - Surveillance automatique"
     [ -f "$BOT_DIR/quick_fix.sh" ] && echo -e "  ${GREEN}•${NC} quick_fix.sh - Dépannage rapide"
-    [ -f "$BOT_DIR/analyze_trades_simple.py" ] && echo -e "  ${GREEN}•${NC} analyze_trades_simple.py - Analyse des performances"
+    [ -f "$BOT_DIR/analyze_trades_simple.py" ] && echo -e "  ${GREEN}•${NC} analyze_trades_simple.py - Analyse simple des performances"
+    [ -f "$BOT_DIR/analyze_results.py" ] && echo -e "  ${GREEN}•${NC} analyze_results.py - Analyse détaillée avec recommandations"
 else
     print_warning "Outils de diagnostic non trouvés (seront disponibles après git pull)"
 fi
@@ -774,6 +776,7 @@ alias bot-filter='sudo journalctl -u basebot-filter -f'
 alias bot-trader='sudo journalctl -u basebot-trader -f'
 alias bot-emergency='cd /home/basebot/trading-bot && python3 emergency_close_positions.py'
 alias bot-analyze='cd /home/basebot/trading-bot && python3 analyze_trades_simple.py'
+alias bot-analyze-full='cd /home/basebot/trading-bot && python3 analyze_results.py'
 ALIASEOF
 
 chown $BOT_USER:$BOT_USER "$BOT_HOME/.bash_aliases"
@@ -824,6 +827,29 @@ for file in "${REQUIRED_FILES[@]}"; do
         ALL_OK=false
     fi
 done
+
+# Vérifier les fichiers de documentation critiques (ajoutés avec les derniers fixes)
+print_step "Vérification de la documentation des derniers fixes..."
+CRITICAL_DOCS=(
+    "$BOT_DIR/VERIFICATION_CRITERES.md"
+    "$BOT_DIR/FIXES_APPLIED.md"
+    "$BOT_DIR/OPTIMIZATIONS_CRITIQUES.md"
+    "$BOT_DIR/DEPLOY_FIXES.md"
+)
+
+DOCS_FOUND=0
+for doc in "${CRITICAL_DOCS[@]}"; do
+    if [ -f "$doc" ]; then
+        DOCS_FOUND=$((DOCS_FOUND + 1))
+    fi
+done
+
+if [ $DOCS_FOUND -ge 3 ]; then
+    print_success "Documentation des fixes critiques présente ($DOCS_FOUND/4)"
+    print_info "Fixes Filter.py appliqués: Volume 24h, Holders strict, Taxes strict, Max Liquidity"
+else
+    print_warning "Documentation des fixes manquante (version ancienne du repo?)"
+fi
 
 # =============================================================================
 # 11. Instructions finales
@@ -884,7 +910,8 @@ echo -e "  ${GREEN}•${NC} ${CYAN}bot-emergency${NC} - Fermeture d'urgence des 
 echo -e "  ${GREEN}•${NC} ${CYAN}bot-restart${NC} - Redémarrer le trader"
 echo -e "  ${GREEN}•${NC} ${CYAN}bot-logs${NC} - Voir les 50 dernières lignes"
 echo -e "  ${GREEN}•${NC} ${CYAN}bot-watch${NC} - Suivre les logs en temps réel"
-echo -e "  ${GREEN}•${NC} ${CYAN}bot-analyze${NC} - Analyser les performances de trading"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-analyze${NC} - Analyse simple des performances"
+echo -e "  ${GREEN}•${NC} ${CYAN}bot-analyze-full${NC} - Analyse détaillée avec recommandations"
 echo ""
 
 echo -e "${CYAN}📊 Dashboard:${NC}"
@@ -966,7 +993,8 @@ BASE TRADING BOT - GUIDE RAPIDE
   bot-logs       - Voir les derniers logs
   bot-watch      - Suivre les logs en direct
   bot-emergency  - Fermeture d'urgence des positions
-  bot-analyze    - Analyser les performances
+  bot-analyze    - Analyse simple des performances
+  bot-analyze-full - Analyse détaillée avec recommandations
 
 🔍 SCRIPTS DE DIAGNOSTIC
   Freeze:        python3 diagnose_freeze.py
