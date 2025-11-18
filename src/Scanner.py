@@ -160,9 +160,10 @@ class EnhancedScanner:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
         try:
+            # ✅ FIX: ORDER BY id au lieu de created_at pour compatibilité anciennes/nouvelles installations
             cursor.execute('''
-                SELECT token_address, symbol, name, created_at FROM discovered_tokens
-                ORDER BY created_at DESC
+                SELECT token_address, symbol, name FROM discovered_tokens
+                ORDER BY id DESC
                 LIMIT 10
             ''')
             rows = cursor.fetchall()
