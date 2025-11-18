@@ -243,24 +243,6 @@ else
     print_success "Repository mis à jour"
 fi
 
-# Migration automatique de la base de données (si nécessaire)
-print_step "Vérification de la base de données..."
-if [ -f "$BOT_DIR/migrate_add_pair_created_at.py" ]; then
-    if [ -f "$BOT_DIR/data/trading.db" ]; then
-        print_info "Base de données existante détectée - Migration automatique..."
-        su - $BOT_USER -c "cd $BOT_DIR && python3 migrate_add_pair_created_at.py" >> "$LOG_FILE" 2>&1
-        if [ $? -eq 0 ]; then
-            print_success "Migration de la base de données terminée"
-        else
-            print_warning "La migration a échoué (voir $LOG_FILE) - Continuons..."
-        fi
-    else
-        print_info "Nouvelle installation - Migration non nécessaire"
-    fi
-else
-    print_info "Script de migration non trouvé - Ignoré"
-fi
-
 # =============================================================================
 # 4. Configuration des répertoires
 # =============================================================================
