@@ -126,9 +126,12 @@ bot-watch  # Alias pour tail -f logs
 
 **Logs attendus (Scanner):**
 ```
-Nov 18 10:00:15 - INFO - ✅ Token découvert: MORI (0x95f3...) - MC: $66,980.00
-Nov 18 10:00:16 - INFO - ✅ Token découvert: GALA (0x5553...) - MC: $33,678.00
-Nov 18 10:00:17 - INFO - 📊 Batch traité: 18 nouveaux | 2 déjà connus
+Nov 18 10:00:00 - INFO - Scanner démarré...
+Nov 18 10:00:00 - INFO - ⏱️ Scanner filtrera tokens entre 2.0h et 12.0h d'âge
+Nov 18 10:00:15 - INFO - ✅ Token découvert: MORI (3.2h) (0x95f3...) - MC: $66,980.00
+Nov 18 10:00:16 - INFO - ✅ Token découvert: GALA (5.1h) (0x5553...) - MC: $33,678.00
+Nov 18 10:00:17 - DEBUG - ⏭️ Token trop jeune: FAST (0.3h < 2.0h)
+Nov 18 10:00:18 - INFO - 📊 Batch traité: 18 nouveaux | 2 déjà connus | 12 trop jeunes | 3 trop vieux
 ```
 
 **Logs attendus (Filter):**

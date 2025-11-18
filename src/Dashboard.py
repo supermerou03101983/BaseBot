@@ -534,6 +534,12 @@ with tab5:
         st.text(f"Intervalle: {config_data.get('SCAN_INTERVAL_SECONDS', 'N/A')}s")
         st.text(f"Max Blocks/Scan: {config_data.get('MAX_BLOCKS_PER_SCAN', 'N/A')}")
 
+        st.markdown("**Filtrage d'Âge:**")
+        min_age = config_data.get('MIN_TOKEN_AGE_HOURS', 'N/A')
+        max_age = config_data.get('MAX_TOKEN_AGE_HOURS', 'N/A')
+        st.text(f"Fenêtre: {min_age}h - {max_age}h")
+        st.caption("Scanner ignore tokens <2h (trop jeunes) et >12h (trop vieux)")
+
     with col2:
         st.subheader("📈 Trailing Stop")
         st.text(f"Activation: +{config_data.get('TRAILING_ACTIVATION_THRESHOLD', 'N/A')}%")

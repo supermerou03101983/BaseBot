@@ -64,6 +64,14 @@ GRACE_PERIOD_ENABLED=false
 | `SCAN_INTERVAL_SECONDS` | `30` | Intervalle entre scans (secondes) | ✅ |
 | `MAX_BLOCKS_PER_SCAN` | `100` | Nombre max de blocs par scan | ✅ |
 | `SCANNER_START_BLOCK` | `0` | Bloc de départ | ✅ |
+| `MIN_TOKEN_AGE_HOURS` | `2` | Âge minimum token pour découverte (heures) | ✅ |
+| `MAX_TOKEN_AGE_HOURS` | `12` | Âge maximum token pour découverte (heures) | ✅ |
+
+**⚠️ IMPORTANT - Filtrage d'Âge par le Scanner:**
+- Le Scanner filtre les tokens **AVANT** de les stocker en DB
+- Seuls les tokens entre `MIN_TOKEN_AGE_HOURS` et `MAX_TOKEN_AGE_HOURS` sont découverts
+- **Exemple:** MIN=2h, MAX=12h → Scanner ignore tokens <2h (trop jeunes) et >12h (trop vieux)
+- **Avantage:** Filter reçoit UNIQUEMENT des tokens "matures" → Meilleure qualité
 
 ---
 

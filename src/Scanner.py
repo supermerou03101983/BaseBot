@@ -54,6 +54,11 @@ class EnhancedScanner:
         self.batch_size = 50  # Tokens à scanner par batch
         self.scan_delay = int(os.getenv('SCAN_INTERVAL_SECONDS', 30))  # Délai entre les scans (secondes)
 
+        # 🔧 NOUVEAU: Filtrage par âge des tokens
+        self.min_token_age_hours = float(os.getenv('MIN_TOKEN_AGE_HOURS', '2'))
+        self.max_token_age_hours = float(os.getenv('MAX_TOKEN_AGE_HOURS', '12'))
+        self.logger.info(f"⏱️ Scanner filtrera tokens entre {self.min_token_age_hours}h et {self.max_token_age_hours}h d'âge")
+
     def setup_logging(self):
         """Configuration du logging"""
         log_file = PROJECT_DIR / 'logs' / 'scanner.log'
@@ -204,6 +209,8 @@ class EnhancedScanner:
         skipped_existing = 0
         skipped_no_address = 0
         skipped_no_details = 0
+        skipped_too_young = 0
+        skipped_too_old = 0
         added = 0
 
         for token_data in tokens:
@@ -243,13 +250,30 @@ class EnhancedScanner:
                 # Convertir pairCreatedAt (timestamp ms) en datetime string
                 pair_created_at = pair_data.get('pairCreatedAt') if pair_data else None
                 pair_created_at_str = None
+                token_age_hours = None
+
                 if pair_created_at:
-                    from datetime import datetime
+                    from datetime import datetime, timezone
                     try:
-                        dt = datetime.fromtimestamp(pair_created_at / 1000)
+                        dt = datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)
                         pair_created_at_str = dt.strftime('%Y-%m-%d %H:%M:%S')
+
+                        # 🔧 NOUVEAU: Calculer l'âge du token
+                        token_age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
                     except:
                         pass
+
+                # 🔧 FILTRE D'ÂGE: Ignorer tokens trop jeunes ou trop vieux
+                if token_age_hours is not None:
+                    if token_age_hours < self.min_token_age_hours:
+                        skipped_too_young += 1
+                        self.logger.debug(f"⏭️ Token trop jeune: {symbol} ({token_age_hours:.1f}h < {self.min_token_age_hours}h)")
+                        continue
+
+                    if token_age_hours > self.max_token_age_hours:
+                        skipped_too_old += 1
+                        self.logger.debug(f"⏭️ Token trop vieux: {symbol} ({token_age_hours:.1f}h > {self.max_token_age_hours}h)")
+                        continue
 
                 # Insérer dans la base de données
                 cursor.execute('''
@@ -258,7 +282,8 @@ class EnhancedScanner:
                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth, pair_created_at_str))
 
-                self.logger.info(f"✅ Token découvert: {symbol} ({token_address}) - MC: ${market_cap:.2f}")
+                age_info = f"({token_age_hours:.1f}h)" if token_age_hours else ""
+                self.logger.info(f"✅ Token découvert: {symbol} {age_info} ({token_address}) - MC: ${market_cap:.2f}")
                 added += 1
 
             except Exception as e:
@@ -268,7 +293,7 @@ class EnhancedScanner:
         conn.close()
 
         # Log récapitulatif
-        self.logger.info(f"📊 Batch traité: {added} nouveaux | {skipped_existing} déjà connus | {skipped_no_address} sans adresse | {skipped_no_details} sans détails")
+        self.logger.info(f"📊 Batch traité: {added} nouveaux | {skipped_existing} déjà connus | {skipped_too_young} trop jeunes | {skipped_too_old} trop vieux | {skipped_no_address} sans adresse | {skipped_no_details} sans détails")
 
     async def run(self):
         """Boucle principale du scanner"""
