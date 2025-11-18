@@ -518,6 +518,16 @@ with tab5:
         st.metric("Max Positions", config_data.get('MAX_POSITIONS', 'N/A'))
         st.metric("Max Trades/Jour", config_data.get('MAX_TRADES_PER_DAY', 'N/A'))
         st.metric("Stop Loss", f"-{config_data.get('STOP_LOSS_PERCENT', 'N/A')}%")
+
+        # Grace Period - Nouveau!
+        grace_enabled = config_data.get('GRACE_PERIOD_ENABLED', 'true').lower() == 'true'
+        if grace_enabled:
+            st.metric("⏱️ Grace Period",
+                     f"{config_data.get('GRACE_PERIOD_MINUTES', 'N/A')}min @ -{config_data.get('GRACE_PERIOD_STOP_LOSS', 'N/A')}%",
+                     help="Période de tolérance au début de la position avec SL élargi pour éviter sorties prématurées")
+        else:
+            st.metric("⏱️ Grace Period", "Désactivée", help="Grace Period désactivée dans la configuration")
+
         st.metric("Expiration Tokens", f"{config_data.get('TOKEN_APPROVAL_MAX_AGE_HOURS', 'N/A')}h")
 
         st.subheader("🔍 Scanner")

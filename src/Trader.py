@@ -47,14 +47,19 @@ class Position:
         self.trailing_active = False
         self.highest_price = entry_price
 
-        # Grace period: 3 minutes avec stop loss élargi
-        self.grace_period_minutes = 3
-        self.grace_period_stop_loss_percent = 35  # -35% pendant grace period
-        self.normal_stop_loss_percent = 5  # -5% après grace period
-        self.grace_period_active = True
+        # Grace period: configurable depuis .env
+        self.grace_period_enabled = os.getenv('GRACE_PERIOD_ENABLED', 'true').lower() == 'true'
+        self.grace_period_minutes = int(os.getenv('GRACE_PERIOD_MINUTES', '3'))
+        self.grace_period_stop_loss_percent = float(os.getenv('GRACE_PERIOD_STOP_LOSS', '35'))  # -35% pendant grace period
+        self.normal_stop_loss_percent = float(os.getenv('STOP_LOSS_PERCENT', '5'))  # -5% après grace period
+        self.grace_period_active = self.grace_period_enabled
 
     def get_active_stop_loss_percent(self):
         """Retourne le stop loss actif selon le grace period"""
+        # Si grace period désactivé, retourner toujours le SL normal
+        if not self.grace_period_enabled:
+            return self.normal_stop_loss_percent
+
         time_since_entry = (datetime.now() - self.entry_time).total_seconds() / 60  # en minutes
 
         if time_since_entry < self.grace_period_minutes:
@@ -69,6 +74,8 @@ class Position:
 
     def is_in_grace_period(self):
         """Vérifie si la position est encore dans le grace period"""
+        if not self.grace_period_enabled:
+            return False
         time_since_entry = (datetime.now() - self.entry_time).total_seconds() / 60
         return time_since_entry < self.grace_period_minutes
 
