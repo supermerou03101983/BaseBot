@@ -391,19 +391,23 @@ class DexScreenerAPI:
     def _parse_pair_data(self, pair: Dict) -> Dict:
         """Parse les donnees d'une paire avec validation"""
         try:
-            # 🔧 FIX: Fallback intelligent pour volume (tokens <24h n'ont pas h24)
+            # 🔧 FIX: Volume effectif RÉEL (pas d'extrapolation)
+            # Pour tokens 2-12h: h6 = volume réel sur 6h (pas besoin d'extrapoler)
+            # Pour tokens >24h: h24 = volume réel sur 24h
             volume_data = pair.get('volume', {})
             volume_h24 = float(volume_data.get('h24') or 0)
             volume_h6 = float(volume_data.get('h6') or 0)
             volume_h1 = float(volume_data.get('h1') or 0)
 
-            # Si h24 = 0 mais h6 > 0, extrapoler (token <24h)
-            if volume_h24 == 0 and volume_h6 > 0:
-                volume_24h = volume_h6 * 4  # Estimation: h6 * 4 = 24h
-            elif volume_h24 == 0 and volume_h1 > 0:
-                volume_24h = volume_h1 * 24  # Estimation: h1 * 24 = 24h
+            # Utiliser le volume RÉEL le plus pertinent (sans multiplication)
+            if volume_h24 > 0:
+                volume_24h = volume_h24  # Token ≥24h
+            elif volume_h6 > 0:
+                volume_24h = volume_h6   # Token 2-12h: volume réel sur 6h
+            elif volume_h1 > 0:
+                volume_24h = volume_h1   # Token <1h: volume réel sur 1h
             else:
-                volume_24h = volume_h24
+                volume_24h = 0
 
             return {
                 'price_usd': float(pair.get('priceUsd', 0)),
@@ -706,19 +710,21 @@ class GeckoTerminalAPI:
             fdv = float(attributes.get('fdv_usd') or 0)
             market_cap = float(attributes.get('market_cap_usd') or fdv)
 
-            # Volume et liquidité avec fallback intelligent
+            # Volume effectif RÉEL (pas d'extrapolation)
             volume_usd = attributes.get('volume_usd') or {}
             volume_h24 = float(volume_usd.get('h24') or 0)
             volume_h6 = float(volume_usd.get('h6') or 0)
             volume_h1 = float(volume_usd.get('h1') or 0)
 
-            # 🔧 FIX: Si h24 = 0 mais h6 > 0, extrapoler (token <24h)
-            if volume_h24 == 0 and volume_h6 > 0:
-                volume_24h = volume_h6 * 4  # Estimation: h6 * 4 = 24h
-            elif volume_h24 == 0 and volume_h1 > 0:
-                volume_24h = volume_h1 * 24  # Estimation: h1 * 24 = 24h
+            # 🔧 FIX: Utiliser volume RÉEL le plus pertinent (sans multiplication)
+            if volume_h24 > 0:
+                volume_24h = volume_h24  # Token ≥24h
+            elif volume_h6 > 0:
+                volume_24h = volume_h6   # Token 2-12h: volume réel sur 6h
+            elif volume_h1 > 0:
+                volume_24h = volume_h1   # Token <1h: volume réel sur 1h
             else:
-                volume_24h = volume_h24
+                volume_24h = 0
 
             liquidity_usd = float(attributes.get('reserve_in_usd') or 0)
 

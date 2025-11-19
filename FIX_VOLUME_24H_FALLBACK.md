@@ -42,15 +42,19 @@ Filter: 0 < 50000 → ❌ REJET
 
 ## ✅ **SOLUTION IMPLÉMENTÉE**
 
-### **Logique Fallback Intelligent:**
+### **Logique Volume RÉEL (Pas d'Extrapolation):**
+
+**Principe:** Pour tokens 2-12h, `volume.h6` = volume RÉEL sur 6h
+- Pas besoin de multiplier par 4
+- C'est le volume effectif du token depuis sa création
 
 ```python
 SI volume.h24 > 0:
-    volume_24h = volume.h24  # Token ≥24h, utiliser h24
+    volume_24h = volume.h24  # Token ≥24h, volume réel 24h
 SINON SI volume.h6 > 0:
-    volume_24h = volume.h6 * 4  # Extrapoler: h6 × 4 = estimation 24h
+    volume_24h = volume.h6   # Token 2-12h, volume réel 6h (pas d'extrapolation!)
 SINON SI volume.h1 > 0:
-    volume_24h = volume.h1 * 24  # Extrapoler: h1 × 24 = estimation 24h
+    volume_24h = volume.h1   # Token <1h, volume réel 1h
 SINON:
     volume_24h = 0  # Pas de volume
 ```
@@ -59,15 +63,17 @@ SINON:
 
 ```
 Token MORI (3h d'âge):
-- volume.h24 = 0
-- volume.h6 = $125,000
+- volume.h24 = 0 (n'existe pas)
+- volume.h6 = $125,000 (volume RÉEL depuis création)
 - volume.h1 = $45,000
 
 AVANT le fix:
 volume_24h = 0 → ❌ REJET (0 < 50,000)
 
-APRÈS le fix:
-volume_24h = 125,000 * 4 = $500,000 → ✅ APPROUVÉ (500,000 > 50,000)
+APRÈS le fix (VOLUME RÉEL):
+volume_24h = $125,000 → ✅ APPROUVÉ (125,000 > 30,000)
+
+Note: MIN_VOLUME_24H réduit à $30k pour tenir compte que h6 < h24
 ```
 
 ---
@@ -83,23 +89,26 @@ volume_24h = 125,000 * 4 = $500,000 → ✅ APPROUVÉ (500,000 > 50,000)
 
 **APRÈS:**
 ```python
-# 🔧 FIX: Fallback intelligent pour volume (tokens <24h n'ont pas h24)
+# 🔧 FIX: Volume effectif RÉEL (pas d'extrapolation)
+# Pour tokens 2-12h: h6 = volume réel sur 6h (pas besoin d'extrapoler)
 volume_data = pair.get('volume', {})
 volume_h24 = float(volume_data.get('h24') or 0)
 volume_h6 = float(volume_data.get('h6') or 0)
 volume_h1 = float(volume_data.get('h1') or 0)
 
-# Si h24 = 0 mais h6 > 0, extrapoler (token <24h)
-if volume_h24 == 0 and volume_h6 > 0:
-    volume_24h = volume_h6 * 4  # Estimation: h6 * 4 = 24h
-elif volume_h24 == 0 and volume_h1 > 0:
-    volume_24h = volume_h1 * 24  # Estimation: h1 * 24 = 24h
+# Utiliser le volume RÉEL le plus pertinent (sans multiplication)
+if volume_h24 > 0:
+    volume_24h = volume_h24  # Token ≥24h
+elif volume_h6 > 0:
+    volume_24h = volume_h6   # Token 2-12h: volume réel sur 6h
+elif volume_h1 > 0:
+    volume_24h = volume_h1   # Token <1h: volume réel sur 1h
 else:
-    volume_24h = volume_h24
+    volume_24h = 0
 
 return {
     ...
-    'volume_24h': volume_24h,
+    'volume_24h': volume_24h,  # Volume RÉEL, pas extrapolé!
     ...
 }
 ```
