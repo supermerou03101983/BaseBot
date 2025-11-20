@@ -129,22 +129,42 @@ class BaseWeb3Manager:
 
             token_address = Web3.to_checksum_address(token_address)
 
-            # Methode simplifiee: Essayer de simuler un swap
-            # Pour une vraie verification, il faudrait:
-            # 1. Acheter une petite quantite
-            # 2. Essayer de vendre
-            # 3. Comparer les montants
+            # 🔧 FIX: Vraie vérification honeypot via API Honeypot.is
+            try:
+                import requests
+                # API Honeypot.is - gratuite, pas de clé requise
+                url = f"https://api.honeypot.is/v2/IsHoneypot?address={token_address}&chainID=8453"
+                response = requests.get(url, timeout=5)
 
-            # Pour l'instant, retournons un resultat par defaut safe
-            # TODO: Implementer une vraie verification via Uniswap Router simulation
+                if response.status_code == 200:
+                    data = response.json()
 
-            return {
-                'is_honeypot': False,  # Assume pas honeypot par defaut
-                'can_sell': True,
-                'buy_tax': 0.0,
-                'sell_tax': 0.0,
-                'error': None
-            }
+                    # Structure réponse: {"simulationSuccess": bool, "isHoneypot": bool, "honeypotReason": str}
+                    is_honeypot = data.get('isHoneypot', False)
+                    simulation_success = data.get('simulationSuccess', False)
+
+                    return {
+                        'is_honeypot': is_honeypot or not simulation_success,  # Honeypot si détecté OU simulation fail
+                        'can_sell': simulation_success and not is_honeypot,
+                        'buy_tax': data.get('buyTax', 0),
+                        'sell_tax': data.get('sellTax', 0),
+                        'error': data.get('honeypotReason') if is_honeypot else None
+                    }
+                else:
+                    # API fail: assumer safe (évite de rejeter tout)
+                    return {
+                        'is_honeypot': False,
+                        'can_sell': True,
+                        'buy_tax': 0.0,
+                        'sell_tax': 0.0,
+                        'error': f"API error: {response.status_code}"
+                    }
+            except requests.exceptions.Timeout:
+                # Timeout: assumer safe
+                return {'is_honeypot': False, 'can_sell': True, 'buy_tax': 0, 'sell_tax': 0, 'error': 'Timeout'}
+            except Exception as api_error:
+                # Erreur API: assumer safe (évite de tout rejeter)
+                return {'is_honeypot': False, 'can_sell': True, 'buy_tax': 0, 'sell_tax': 0, 'error': str(api_error)}
 
         except Exception as e:
             return {

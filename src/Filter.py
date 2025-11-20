@@ -330,6 +330,7 @@ class AdvancedFilter:
             return 0, reasons  # Rejet si taxes connues ET trop élevées
 
         # Données on-chain (détails du contrat, honeypot, etc.) - via web3_utils
+        # 🔧 FIX: Honeypot = REJET AUTOMATIQUE (pas juste pénalité)
         try:
             token_address = token_data['token_address']
             honeypot_check = self.web3_manager.check_honeypot(token_address)
@@ -337,10 +338,14 @@ class AdvancedFilter:
                 score += 15
                 reasons.append("Passed honeypot check")
             else:
-                reasons.append("Failed honeypot check")
+                # ❌ REJET AUTOMATIQUE si honeypot détecté
+                reasons.append(f"❌ REJET: Honeypot détecté (is_honeypot={honeypot_check.get('is_honeypot')})")
+                return 0, reasons
         except Exception as e:
             self.logger.warning(f"Erreur check honeypot pour {token_data['token_address']}: {e}")
-            reasons.append("Honeypot check failed")
+            # En cas d'erreur API, pénalité mais pas rejet automatique
+            reasons.append("⚠️ Honeypot check failed (erreur API) - pénalité -10")
+            score -= 10
 
         # Limiter le score à 100
         score = min(score, 100.0)
