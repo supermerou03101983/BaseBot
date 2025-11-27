@@ -245,25 +245,33 @@ class AdvancedFilter:
         else:
             reasons.append(f"Liquidity (${liquidity:,.2f}) > max (${self.max_liquidity:,.2f})")
 
-        # Volume 24h (STRICT - Fix #1 renforcé)
+        # Volume 24h et 1h (Modification #4 - Accepter Vol24h faible si Vol1h fort)
+        # Pour tokens récents (3-4h), Volume 24h peut être $0 mais Vol 1h fort = pump actif
         volume_24h = token_data.get('volume_24h', 0)
-        if volume_24h < self.min_volume_24h:
-            # Volume insuffisant = REJET AUTOMATIQUE (protection contre manipulation)
-            reasons.append(f"❌ REJET: Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f})")
-            return 0, reasons  # Rejet automatique - critère critique
-
-        score += 10
-        reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
-
-        # Volume 1h (CRITIQUE - Fix tokens morts)
-        # Rejette les tokens sans activité récente même si volume_24h est élevé
         volume_1h = token_data.get('volume_1h', 0)
-        if volume_1h == 0:
-            reasons.append(f"❌ REJET: Volume 1h = $0 (token mort, pas d'activité récente)")
+
+        # Vérification Volume 1h d'abord (activité récente = prioritaire)
+        min_volume_1h = float(os.getenv('MIN_VOLUME_1H', 20))
+        if volume_1h < min_volume_1h:
+            reasons.append(f"❌ REJET: Volume 1h (${volume_1h:,.2f}) < min (${min_volume_1h:,.2f}) - Pas d'activité récente")
             return 0, reasons  # Rejet automatique - token sans activité
 
-        score += 5
-        reasons.append(f"Volume 1h (${volume_1h:,.2f}) OK - Token actif")
+        score += 10
+        reasons.append(f"✅ Volume 1h (${volume_1h:,.2f}) OK - Activité récente confirmée")
+
+        # Volume 24h - Accepter $0 si Volume 1h suffisant (tokens très récents)
+        if volume_24h < self.min_volume_24h:
+            if volume_1h >= min_volume_1h:
+                # Exception: Vol24h faible/nul mais Vol1h fort = Token récent en pump
+                score += 5
+                reasons.append(f"⚠️ Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f}) MAIS Vol1h fort → ACCEPTÉ")
+            else:
+                # Les deux volumes sont faibles = rejet
+                reasons.append(f"❌ REJET: Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f}) ET Vol1h faible")
+                return 0, reasons
+        else:
+            score += 10
+            reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
 
         # Age (si disponible) - Doit avoir AU MOINS min_age_hours
         # ✅ FIX: Utiliser pair_created_at (date blockchain) au lieu de created_at (date découverte)
