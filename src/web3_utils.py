@@ -435,6 +435,7 @@ class DexScreenerAPI:
                 'liquidity_usd': float(pair.get('liquidity', {}).get('usd', 0)),
                 'volume_24h': volume_24h,
                 'volume_1h': volume_h1,
+                'price_change_5m': float(pair.get('priceChange', {}).get('m5', 0)),
                 'price_change_1h': float(pair.get('priceChange', {}).get('h1', 0)),
                 'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0)),
                 'txns_24h': (pair.get('txns', {}).get('h24', {}).get('buys', 0) +
@@ -798,6 +799,7 @@ class GeckoTerminalAPI:
                     'name': quote_symbol,
                     'symbol': quote_symbol
                 },
+                'price_change_5m': float((attributes.get('price_change_percentage') or {}).get('m5') or 0),
                 'price_change_1h': float((attributes.get('price_change_percentage') or {}).get('h1') or 0),
                 'price_change_24h': float((attributes.get('price_change_percentage') or {}).get('h24') or 0),
                 'txns_24h': (attributes.get('transactions') or {}).get('h24', {}).get('buys', 0) +

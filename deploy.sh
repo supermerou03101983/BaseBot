@@ -386,12 +386,14 @@ AERODROME_FACTORY=0x420DD381b31aEf6683db6B902084cB0FFECe40Da
 
 FILTER_INTERVAL_SECONDS=60
 
-# Critères principaux (stratégie optimisée)
+# Critères principaux (stratégie optimisée - Modification #1)
+# ⚠️ IMPORTANT: Ces valeurs ont été assouplies après tests
+#               pour permettre le trading sur tokens 2-12h d'âge
 MIN_AGE_HOURS=2
-MIN_LIQUIDITY_USD=30000
-MIN_VOLUME_24H=30000  # Volume réel (h6 pour tokens 2-12h, pas extrapolé)
-MIN_HOLDERS=150
-MIN_MARKET_CAP=25000
+MIN_LIQUIDITY_USD=5000    # Assoupliss de $30K à $5K (Mod #1)
+MIN_VOLUME_24H=3000       # Assoupliss de $30K à $3K (Mod #1)
+MIN_HOLDERS=50            # Assoupliss de 150 à 50 (Mod #1)
+MIN_MARKET_CAP=5000       # Assoupliss de $25K à $5K (Mod #1)
 MAX_MARKET_CAP=10000000
 MAX_LIQUIDITY_USD=10000000
 MAX_BUY_TAX=5
@@ -399,8 +401,8 @@ MAX_SELL_TAX=5
 MAX_SLIPPAGE=3
 
 # Scores de sécurité et potentiel
-MIN_SAFETY_SCORE=70
-MIN_POTENTIAL_SCORE=60
+MIN_SAFETY_SCORE=50       # Assoupliss de 70 à 50 (Mod #1)
+MIN_POTENTIAL_SCORE=40    # Assoupliss de 60 à 40 (Mod #1)
 
 # ============================================
 # 📈 TRAILING STOP CONFIGURATION
@@ -530,10 +532,37 @@ else
 fi
 
 # =============================================================================
-# 8. Nettoyage et préparation des fichiers de logs
+# 8. Application des patches critiques
 # =============================================================================
 
-print_header "8️⃣  Nettoyage des fichiers de logs"
+print_header "8️⃣  Application des patches critiques"
+
+# Patch volume_1h : CRITIQUE pour éviter les tokens morts
+if [ -f "$BOT_DIR/add_volume_1h_filter.py" ]; then
+    print_step "Application du patch volume_1h (filtre tokens morts)..."
+
+    # Vérifier si le patch est déjà appliqué
+    if grep -q "volume_1h" "$BOT_DIR/src/Filter.py" 2>/dev/null; then
+        print_info "Patch volume_1h déjà appliqué"
+    else
+        su - $BOT_USER -c "source $VENV_DIR/bin/activate && cd $BOT_DIR && python add_volume_1h_filter.py" >> "$LOG_FILE" 2>&1
+        if [ $? -eq 0 ]; then
+            print_success "Patch volume_1h appliqué avec succès"
+            print_info "Le filtre rejettera automatiquement les tokens avec volume_1h = 0"
+        else
+            print_warning "Échec application patch volume_1h (continuez manuellement)"
+        fi
+    fi
+else
+    print_warning "Script add_volume_1h_filter.py non trouvé"
+    print_info "Le filtre volume_1h devra être appliqué manuellement après déploiement"
+fi
+
+# =============================================================================
+# 9. Nettoyage et préparation des fichiers de logs
+# =============================================================================
+
+print_header "9️⃣  Nettoyage des fichiers de logs"
 
 print_step "Suppression des anciens fichiers de logs (si existants)..."
 # Supprimer les anciens fichiers de logs pour éviter les problèmes de permissions
@@ -549,10 +578,10 @@ chmod 755 "$BOT_DIR/logs"
 print_success "Permissions configurées"
 
 # =============================================================================
-# 9. Configuration des services systemd
+# 10. Configuration des services systemd
 # =============================================================================
 
-print_header "9️⃣  Configuration des services systemd"
+print_header "🔟 Configuration des services systemd"
 
 # Service Scanner
 print_step "Création du service Scanner..."
@@ -648,10 +677,10 @@ print_success "Services systemd créés"
 log "Services systemd configurés"
 
 # =============================================================================
-# 10. Configuration du pare-feu (optionnel)
+# 11. Configuration du pare-feu (optionnel)
 # =============================================================================
 
-print_header "🔟 Configuration du pare-feu"
+print_header "1️⃣1️⃣ Configuration du pare-feu"
 
 if command -v ufw &> /dev/null; then
     print_step "Configuration UFW..."
@@ -667,10 +696,10 @@ else
 fi
 
 # =============================================================================
-# 11. Configuration de la maintenance automatique
+# 12. Configuration de la maintenance automatique
 # =============================================================================
 
-print_header "1️⃣1️⃣ Configuration de la maintenance automatique"
+print_header "1️⃣2️⃣ Configuration de la maintenance automatique"
 
 print_step "Copie du script de maintenance safe..."
 if [ -f "$BOT_DIR/maintenance_safe.sh" ]; then
@@ -733,10 +762,10 @@ chmod +x "$BOT_DIR/watchdog.py" 2>/dev/null || true
 print_success "Watchdog anti-freeze configuré"
 
 # =============================================================================
-# 12. Installation des outils de diagnostic et déblocage
+# 13. Installation des outils de diagnostic et déblocage
 # =============================================================================
 
-print_header "1️⃣2️⃣ Installation des outils de diagnostic"
+print_header "1️⃣3️⃣ Installation des outils de diagnostic"
 
 print_step "Configuration des outils de déblocage..."
 
@@ -806,10 +835,10 @@ print_info "Tapez 'bot-status' pour diagnostiquer"
 print_info "Tapez 'bot-fix' pour dépannage rapide"
 
 # =============================================================================
-# 13. Tests de validation
+# 14. Tests de validation
 # =============================================================================
 
-print_header "1️⃣2️⃣ Tests de validation"
+print_header "1️⃣4️⃣ Tests de validation"
 
 print_step "Vérification de l'installation Python..."
 su - $BOT_USER -c "source $VENV_DIR/bin/activate && python -c 'import web3, pandas, streamlit; print(\"✓ Modules OK\")'" >> "$LOG_FILE" 2>&1
@@ -845,6 +874,8 @@ CRITICAL_DOCS=(
     "$BOT_DIR/FIXES_APPLIED.md"
     "$BOT_DIR/OPTIMIZATIONS_CRITIQUES.md"
     "$BOT_DIR/DEPLOY_FIXES.md"
+    "$BOT_DIR/FIX_REAL_PRICES_VOLUME_1H.md"
+    "$BOT_DIR/DEPLOYMENT_REPORT_MOD1.md"
 )
 
 DOCS_FOUND=0
@@ -854,15 +885,18 @@ for doc in "${CRITICAL_DOCS[@]}"; do
     fi
 done
 
-if [ $DOCS_FOUND -ge 3 ]; then
-    print_success "Documentation des fixes critiques présente ($DOCS_FOUND/4)"
-    print_info "Fixes Filter.py appliqués: Volume 24h, Holders strict, Taxes strict, Max Liquidity"
+if [ $DOCS_FOUND -ge 4 ]; then
+    print_success "Documentation des fixes critiques présente ($DOCS_FOUND/6)"
+    print_info "Fixes appliqués:"
+    print_info "  • Modification #1: Critères assouplies (MIN_VOLUME $3K, MIN_LIQUIDITY $5K)"
+    print_info "  • Filtre volume_1h: Rejette automatiquement les tokens morts (volume_1h=0)"
+    print_info "  • Prix réels: Mode PAPER utilise uniquement les prix DexScreener"
 else
     print_warning "Documentation des fixes manquante (version ancienne du repo?)"
 fi
 
 # =============================================================================
-# 11. Instructions finales
+# 15. Instructions finales
 # =============================================================================
 
 print_header "✅ Installation terminée !"

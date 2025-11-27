@@ -255,6 +255,16 @@ class AdvancedFilter:
         score += 10
         reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
 
+        # Volume 1h (CRITIQUE - Fix tokens morts)
+        # Rejette les tokens sans activité récente même si volume_24h est élevé
+        volume_1h = token_data.get('volume_1h', 0)
+        if volume_1h == 0:
+            reasons.append(f"❌ REJET: Volume 1h = $0 (token mort, pas d'activité récente)")
+            return 0, reasons  # Rejet automatique - token sans activité
+
+        score += 5
+        reasons.append(f"Volume 1h (${volume_1h:,.2f}) OK - Token actif")
+
         # Age (si disponible) - Doit avoir AU MOINS min_age_hours
         # ✅ FIX: Utiliser pair_created_at (date blockchain) au lieu de created_at (date découverte)
         pair_created_at = token_data.get('pair_created_at')
@@ -280,6 +290,30 @@ class AdvancedFilter:
             except Exception as e:
                 reasons.append(f"Age non vérifié (erreur: {str(e)[:50]})")
 
+        # Momentum haussier 5min (Modification #3 - Nouveau)
+        # Confirme momentum immédiat (évite rebonds techniques de dumps)
+        min_price_change_5m = float(os.getenv('MIN_PRICE_CHANGE_5M', 2))
+        price_change_5m = token_data.get('price_change_5m', 0)
+
+        if price_change_5m < min_price_change_5m:
+            reasons.append(f"❌ REJET: Prix 5min ({price_change_5m:+.2f}%) < min (+{min_price_change_5m:.0f}%) - Pas de momentum immédiat")
+            return 0, reasons
+
+        score += 5  # Bonus pour momentum immédiat
+        reasons.append(f"✅ Momentum 5min ({price_change_5m:+.2f}%) OK - Momentum immédiat confirmé")
+
+        # Momentum haussier 1h (Modification #3 - Assoupli à +3%)
+        # Rejette les tokens sans tendance haussière confirmée
+        min_price_change_1h = float(os.getenv('MIN_PRICE_CHANGE_1H', 3))
+        price_change_1h = token_data.get('price_change_1h', 0)
+
+        if price_change_1h < min_price_change_1h:
+            reasons.append(f"❌ REJET: Prix 1h ({price_change_1h:+.2f}%) < min (+{min_price_change_1h:.0f}%) - Pas de tendance haussière")
+            return 0, reasons
+
+        score += 10  # Bonus pour tendance générale
+        reasons.append(f"✅ Momentum 1h ({price_change_1h:+.2f}%) OK - Tendance haussière confirmée")
+        
         # Holders (SEMI-STRICT - Fix #2 ajusté)
         # ⚠️ API Base Network ne retourne pas toujours les holders
         # On pénalise fortement au lieu de rejeter automatiquement

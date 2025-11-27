@@ -30,3 +30,9 @@ data/position_*.json
 
 # Journaux système
 *.log
+
+# Credentials VPS (NE PAS COMMITTER)
+vps_credentials.conf
+
+# Données temporaires du VPS
+temp_vps_data/

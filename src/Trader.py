@@ -27,7 +27,7 @@ from web3_utils import (
 )
 from honeypot_checker import HoneypotChecker
 
-load_dotenv(PROJECT_DIR / 'config' / '.env')
+load_dotenv(PROJECT_DIR / 'config' / '.env', override=True)
 
 class Position:
     """Represente une position ouverte avec gestion avancee"""
@@ -49,8 +49,8 @@ class Position:
 
         # Grace period: configurable depuis .env
         self.grace_period_enabled = os.getenv('GRACE_PERIOD_ENABLED', 'true').lower() == 'true'
-        self.grace_period_minutes = int(os.getenv('GRACE_PERIOD_MINUTES', '3'))
-        self.grace_period_stop_loss_percent = float(os.getenv('GRACE_PERIOD_STOP_LOSS', '35'))  # -35% pendant grace period
+        self.grace_period_minutes = int(os.getenv('GRACE_PERIOD_MINUTES', '5'))
+        self.grace_period_stop_loss_percent = float(os.getenv('GRACE_PERIOD_STOP_LOSS', '25'))  # -35% pendant grace period
         self.normal_stop_loss_percent = float(os.getenv('STOP_LOSS_PERCENT', '5'))  # -5% après grace period
         self.grace_period_active = self.grace_period_enabled
 
@@ -114,6 +114,9 @@ class RealTrader:
         # Cooldown pour tokens rejetés (éviter boucles infinies)
         self.rejected_tokens_cooldown = {}  # {token_address: timestamp}
         self.cooldown_minutes = int(os.getenv('REJECTED_TOKEN_COOLDOWN_MINUTES', 30))
+
+        # Cooldown tokens perdants (Modification #3 - éviter re-trade immédiat)
+        self.losing_tokens_cooldown = {}  # {token_address: timestamp}
         
         # Router ABI pour Uniswap V3
         self.router_abi = json.loads('''[
@@ -732,6 +735,23 @@ class RealTrader:
             self.logger.error(f"Prix invalide pour {token['symbol']}: {token.get('price_usd')}")
             return False
 
+        # Cooldown tokens perdants (Modification #3)
+        # Ne pas re-trader un token perdu dans les 24h
+        token_address = token.get('address', '').lower()
+        if token_address in self.losing_tokens_cooldown:
+            cooldown_end = self.losing_tokens_cooldown[token_address]
+            hours_since = (time.time() - cooldown_end) / 3600
+            if hours_since < 24:
+                self.logger.info(
+                    f"❌ {token['symbol']} en cooldown perdant "
+                    f"(perdu il y a {hours_since:.1f}h, reste {24-hours_since:.1f}h)"
+                )
+                return False
+            else:
+                # Cooldown expiré, supprimer
+                del self.losing_tokens_cooldown[token_address]
+                self.logger.info(f"✅ Cooldown expiré pour {token['symbol']} ({hours_since:.1f}h)")
+
         # RE-VALIDATION avant achat (protection contre tokens obsolètes/rug)
         is_valid, reason, fresh_price = self.validate_token_before_buy(token)
         if not is_valid:
@@ -767,7 +787,7 @@ class RealTrader:
                 # Log du grace period activé
                 self.logger.info(
                     f"🛡️ Grace period activé pour {token['symbol']}: "
-                    f"3 minutes avec stop loss à -35% (puis -5%)"
+                    f"{position.grace_period_minutes} minutes avec stop loss à -{position.grace_period_stop_loss_percent}% (puis -5%)"
                 )
 
                 self.positions[token['address']] = position
@@ -887,7 +907,7 @@ class RealTrader:
                     # Log du grace period activé
                     self.logger.info(
                         f"🛡️ Grace period activé pour {token['symbol']}: "
-                        f"3 minutes avec stop loss à -35% (puis -5%)"
+                        f"{position.grace_period_minutes} minutes avec stop loss à -{position.grace_period_stop_loss_percent}% (puis -5%)"
                     )
 
                     self.positions[token['address']] = position
@@ -946,7 +966,16 @@ class RealTrader:
                     f"Profit: {profit_percent:.2f}% | "
                     f"Raison: {reason}"
                 )
-                
+
+                # Cooldown tokens perdants (Modification #3)
+                if profit_percent < 0:
+                    token_address = position.token_address.lower()
+                    self.losing_tokens_cooldown[token_address] = time.time()
+                    self.logger.info(
+                        f"🔒 {position.symbol} ajouté au cooldown perdant (24h) "
+                        f"après perte de {profit_percent:.2f}%"
+                    )
+
                 self.save_sell_to_db(position, profit_percent, reason, 'paper')
                 del self.positions[position.token_address]
                 
@@ -1096,9 +1125,18 @@ class RealTrader:
                         f"Profit: {profit_percent:.2f}% | "
                         f"TX: {swap_hash.hex()}"
                     )
-                    
+
+                    # Cooldown tokens perdants (Modification #3)
+                    if profit_percent < 0:
+                        token_address = position.token_address.lower()
+                        self.losing_tokens_cooldown[token_address] = time.time()
+                        self.logger.info(
+                            f"🔒 {position.symbol} ajouté au cooldown perdant (24h) "
+                            f"après perte de {profit_percent:.2f}%"
+                        )
+
                     self.save_sell_to_db(position, profit_percent, reason, 'real', swap_hash.hex())
-                    
+
                     del self.positions[position.token_address]
                     
                     # Supprimer le fichier de sauvegarde
