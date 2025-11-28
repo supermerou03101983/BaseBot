@@ -22,6 +22,7 @@ from web3 import Web3
 from web3.exceptions import BlockNotFound, ContractLogicError
 from eth_utils import to_checksum_address
 from dotenv import load_dotenv
+from web3_utils import DexScreenerAPI
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
 
@@ -76,6 +77,9 @@ class UnifiedScanner:
 
         self.logger.info(f"✅ Connecté au RPC Base (bloc: {self.w3.eth.block_number})")
 
+        # Initialiser DexScreener pour enrichissement
+        self.dex_api = DexScreenerAPI()
+
         # Normaliser les adresses des factories et base tokens
         self.base_tokens = [
             to_checksum_address(WETH_BASE),
@@ -90,6 +94,7 @@ class UnifiedScanner:
 
         self.logger.info(f"⏱️  Scanner on-chain: tokens {self.min_token_age_hours}h-{self.max_token_age_hours}h")
         self.logger.info(f"🏭 Factories: Aerodrome + BaseSwap")
+        self.logger.info(f"📊 Enrichissement: DexScreener API")
 
     def setup_logging(self):
         """Configuration du logging"""
@@ -125,7 +130,7 @@ class UnifiedScanner:
                 cursor.execute("DROP TABLE discovered_tokens")
                 conn.commit()
 
-        # Table des tokens découverts (nouvelle structure on-chain)
+        # Table des tokens découverts (structure hybride: on-chain + marché)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS discovered_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -133,18 +138,25 @@ class UnifiedScanner:
                 symbol TEXT,
                 name TEXT,
                 decimals INTEGER,
+                total_supply TEXT,
                 pair_address TEXT,
                 base_token TEXT,
                 factory TEXT,
                 block_created INTEGER,
                 age_hours REAL,
+                liquidity REAL DEFAULT 0,
+                market_cap REAL DEFAULT 0,
+                volume_24h REAL DEFAULT 0,
+                price_usd REAL DEFAULT 0,
+                price_eth REAL DEFAULT 0,
+                pair_created_at TIMESTAMP,
                 discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
         conn.commit()
         conn.close()
-        self.logger.info("✅ Base de données initialisée (structure on-chain)")
+        self.logger.info("✅ Base de données initialisée (structure hybride on-chain + marché)")
 
     def scan_tokens_in_age_window(self) -> List[Dict]:
         """
@@ -356,7 +368,7 @@ class UnifiedScanner:
             return {'name': 'Unknown', 'symbol': '???', 'decimals': 18}
 
     async def process_token_batch(self, tokens: List[Dict]):
-        """Traite un batch de tokens et les enregistre en DB"""
+        """Traite un batch de tokens et les enregistre en DB avec enrichissement DexScreener"""
         if not tokens:
             return
 
@@ -378,25 +390,53 @@ class UnifiedScanner:
                     existing_count += 1
                     continue
 
-                # Enrichir avec métadonnées
+                # Enrichir avec métadonnées ERC20
                 metadata = self.get_token_metadata(token_data['token_address'])
 
-                # Insérer en DB
+                # Enrichir avec données de marché DexScreener
+                market_data = self.dex_api.get_token_info(token_data['token_address'])
+
+                liquidity = 0
+                market_cap = 0
+                volume_24h = 0
+                price_usd = 0
+                price_eth = 0
+                total_supply = "0"
+                pair_created_at = None
+
+                if market_data:
+                    liquidity = market_data.get('liquidity', 0)
+                    market_cap = market_data.get('market_cap', 0)
+                    volume_24h = market_data.get('volume_24h', 0)
+                    price_usd = market_data.get('price_usd', 0)
+                    price_eth = market_data.get('price_eth', 0)
+                    total_supply = str(market_data.get('total_supply', 0))
+                    pair_created_at = market_data.get('pair_created_at')
+
+                # Insérer en DB avec toutes les données
                 cursor.execute('''
                     INSERT INTO discovered_tokens
-                    (token_address, symbol, name, decimals, pair_address, base_token,
-                     factory, block_created, age_hours)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    (token_address, symbol, name, decimals, total_supply, pair_address, base_token,
+                     factory, block_created, age_hours, liquidity, market_cap, volume_24h,
+                     price_usd, price_eth, pair_created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     token_data['token_address'],
                     metadata['symbol'],
                     metadata['name'],
                     metadata['decimals'],
+                    total_supply,
                     token_data['pair_address'],
                     token_data['base_token'],
                     token_data['factory_name'],
                     token_data['block_created'],
-                    token_data['age_hours']
+                    token_data['age_hours'],
+                    liquidity,
+                    market_cap,
+                    volume_24h,
+                    price_usd,
+                    price_eth,
+                    pair_created_at
                 ))
 
                 new_count += 1
