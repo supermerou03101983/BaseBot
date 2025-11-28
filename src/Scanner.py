@@ -110,7 +110,22 @@ class UnifiedScanner:
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        # Table des tokens découverts
+        # Vérifier si la table existe et a l'ancienne structure
+        cursor.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='discovered_tokens'")
+        table_exists = cursor.fetchone() is not None
+
+        if table_exists:
+            # Vérifier si on a l'ancienne structure
+            cursor.execute("PRAGMA table_info(discovered_tokens)")
+            columns = [col[1] for col in cursor.fetchall()]
+
+            if 'pair_address' not in columns:
+                # Migration nécessaire: supprimer l'ancienne table et recréer
+                self.logger.info("🔄 Migration table discovered_tokens (ancienne structure détectée)")
+                cursor.execute("DROP TABLE discovered_tokens")
+                conn.commit()
+
+        # Table des tokens découverts (nouvelle structure on-chain)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS discovered_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -129,6 +144,7 @@ class UnifiedScanner:
 
         conn.commit()
         conn.close()
+        self.logger.info("✅ Base de données initialisée (structure on-chain)")
 
     def scan_tokens_in_age_window(self) -> List[Dict]:
         """
