@@ -36,3 +36,13 @@ vps_credentials.conf
 
 # Données temporaires du VPS
 temp_vps_data/
+
+# Scripts temporaires et patches
+*_backup*.py
+*_original.py
+patch_*.py
+fix_*.py
+add_*.py
+apply_*.sh
+integrate_*.py
+manual_*.py
