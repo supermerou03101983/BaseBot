@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """
-Scanner - Avec récupération complète des données on-chain
+Scanner Unifié - Détection de tokens via événements PairCreated on-chain
+Remplace l'approche DexScreener/GeckoTerminal par un scan blockchain direct
 """
 
 import asyncio
@@ -9,7 +10,6 @@ import time
 import os
 import sys
 import logging
-import subprocess
 from datetime import datetime
 from typing import Dict, Optional, List
 from pathlib import Path
@@ -19,12 +19,35 @@ PROJECT_DIR = Path(__file__).parent.parent
 sys.path.append(str(PROJECT_DIR / 'src'))
 
 from web3 import Web3
+from web3.exceptions import BlockNotFound, ContractLogicError
+from eth_utils import to_checksum_address
 from dotenv import load_dotenv
-from web3_utils import BaseWeb3Manager, UniswapV3Manager, DexScreenerAPI, GeckoTerminalAPI
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
 
-class EnhancedScanner:
+# Configuration on-chain
+BLOCKS_PER_HOUR = 1800  # Base: ~2s par bloc
+CHUNK_SIZE = 1000  # Limite RPC pour get_logs
+
+# Factory Addresses (Base Mainnet)
+AERODROME_FACTORY = "0x420DD381b31aEf6683db6B902084cB0FFECe40Da"
+BASESWAP_FACTORY = "0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6"
+
+# Base Tokens (pour filtrage des paires)
+WETH_BASE = "0x4200000000000000000000000000000000000006"
+USDC_BASE = "0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913"
+USDBC_BASE = "0xd9aAEc86B65D86f6A7B5B1b0c42FFA531710b6CA"
+
+# Event signature
+PAIR_CREATED_EVENT_SIGNATURE = Web3.keccak(text="PairCreated(address,address,address,uint256)").hex()
+
+
+class UnifiedScanner:
+    """
+    Scanner unifié qui détecte les tokens via événements PairCreated on-chain.
+    Indépendant des APIs externes (DexScreener/GeckoTerminal).
+    """
+
     def __init__(self):
         # Créer les dossiers nécessaires
         (PROJECT_DIR / 'data').mkdir(parents=True, exist_ok=True)
@@ -32,32 +55,41 @@ class EnhancedScanner:
         (PROJECT_DIR / 'config').mkdir(parents=True, exist_ok=True)
         self.db_path = PROJECT_DIR / 'data' / 'trading.db'
 
-        # Setup logging en premier
+        # Setup logging
         self.setup_logging()
 
-        # Initialiser la base de données si nécessaire
+        # Initialiser la base de données
         self.init_database()
 
-        # Web3 setup avec gestion d'erreur
-        try:
-            self.web3_manager = BaseWeb3Manager(
-                rpc_url=os.getenv('RPC_URL', 'https://mainnet.base.org'),
-                private_key=os.getenv('PRIVATE_KEY')
-            )
-            self.uniswap = UniswapV3Manager(self.web3_manager)
-            self.dexscreener = DexScreenerAPI()
-            self.geckoterminal = GeckoTerminalAPI()  # Nouveau: API pour nouveaux pools
-        except Exception as e:
-            self.logger.error(f"Erreur initialisation Web3/API: {e}")
-            raise
-
-        self.batch_size = 50  # Tokens à scanner par batch
-        self.scan_delay = int(os.getenv('SCAN_INTERVAL_SECONDS', 30))  # Délai entre les scans (secondes)
-
-        # 🔧 NOUVEAU: Filtrage par âge des tokens
+        # Configuration scanner
+        self.batch_size = int(os.getenv('BATCH_SIZE', 50))
+        self.scan_delay = int(os.getenv('SCAN_INTERVAL_SECONDS', 30))
         self.min_token_age_hours = float(os.getenv('MIN_TOKEN_AGE_HOURS', '2'))
         self.max_token_age_hours = float(os.getenv('MAX_TOKEN_AGE_HOURS', '12'))
-        self.logger.info(f"⏱️ Scanner filtrera tokens entre {self.min_token_age_hours}h et {self.max_token_age_hours}h d'âge")
+
+        # Web3 setup pour scanner on-chain
+        rpc_url = os.getenv('RPC_URL', 'https://mainnet.base.org')
+        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+        if not self.w3.is_connected():
+            raise ConnectionError(f"❌ Impossible de se connecter au RPC: {rpc_url}")
+
+        self.logger.info(f"✅ Connecté au RPC Base (bloc: {self.w3.eth.block_number})")
+
+        # Normaliser les adresses des factories et base tokens
+        self.base_tokens = [
+            to_checksum_address(WETH_BASE),
+            to_checksum_address(USDC_BASE),
+            to_checksum_address(USDBC_BASE)
+        ]
+
+        self.factories = [
+            to_checksum_address(AERODROME_FACTORY),
+            to_checksum_address(BASESWAP_FACTORY)
+        ]
+
+        self.logger.info(f"⏱️  Scanner on-chain: tokens {self.min_token_age_hours}h-{self.max_token_age_hours}h")
+        self.logger.info(f"🏭 Factories: Aerodrome + BaseSwap")
 
     def setup_logging(self):
         """Configuration du logging"""
@@ -74,7 +106,7 @@ class EnhancedScanner:
         self.logger = logging.getLogger(__name__)
 
     def init_database(self):
-        """Initialise la base de données si nécessaire"""
+        """Initialise la base de données"""
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -86,242 +118,313 @@ class EnhancedScanner:
                 symbol TEXT,
                 name TEXT,
                 decimals INTEGER,
-                total_supply TEXT,
-                liquidity REAL,
-                market_cap REAL,
-                volume_24h REAL,
-                price_usd REAL,
-                price_eth REAL,
-                pair_created_at TIMESTAMP,
+                pair_address TEXT,
+                base_token TEXT,
+                factory TEXT,
+                block_created INTEGER,
+                age_hours REAL,
                 discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
 
-        # Table de l'état du scanner (dernier bloc scanné)
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS scanner_state (
-                id INTEGER PRIMARY KEY,
-                last_block INTEGER NOT NULL
-            )
-        ''')
-
-        # Initialiser avec bloc 0 si vide
-        cursor.execute("INSERT OR IGNORE INTO scanner_state (id, last_block) VALUES (1, 0)")
-
         conn.commit()
         conn.close()
 
-    def get_last_scanned_block(self) -> int:
-        """Récupère le dernier bloc scanné depuis la DB"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        result = cursor.execute("SELECT last_block FROM scanner_state WHERE id = 1").fetchone()
-        conn.close()
-        return result[0] if result else 0
-
-    def update_last_scanned_block(self, block_number: int):
-        """Met à jour le dernier bloc scanné dans la DB"""
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
-        cursor.execute("UPDATE scanner_state SET last_block = ? WHERE id = 1", (block_number,))
-        conn.commit()
-        conn.close()
-
-    async def fetch_new_tokens(self) -> List[Dict]:
+    def scan_tokens_in_age_window(self) -> List[Dict]:
         """
-        Récupère les nouveaux tokens depuis GeckoTerminal (priorité) puis DexScreener.
-        GeckoTerminal est optimisé pour découvrir les nouveaux pools.
+        Scanne les événements PairCreated dans la fenêtre d'âge configurée.
+
+        Returns:
+            Liste de tokens détectés
         """
         try:
-            # PRIORITÉ 1: GeckoTerminal pour les nouveaux pools (mis à jour toutes les 60s)
-            self.logger.info("Récupération des nouveaux pools depuis GeckoTerminal...")
-            new_pools = self.geckoterminal.get_new_pools(network='base', page=1)
+            current_block = self.w3.eth.block_number
+            from_block = current_block - int(self.max_token_age_hours * BLOCKS_PER_HOUR)
+            to_block = current_block - int(self.min_token_age_hours * BLOCKS_PER_HOUR)
 
-            if new_pools and len(new_pools) > 0:
-                self.logger.info(f"{len(new_pools)} nouveaux pools trouvés sur GeckoTerminal")
-                return new_pools
+            self.logger.info(
+                f"🔍 Scan blocs {from_block} → {to_block} "
+                f"({self.max_token_age_hours}h-{self.min_token_age_hours}h)"
+            )
 
-            # PRIORITÉ 2: DexScreener en fallback si GeckoTerminal ne retourne rien
-            self.logger.info("Fallback vers DexScreener...")
-            new_pairs = self.dexscreener.get_recent_pairs_on_chain('base', limit=50)
+            all_tokens = []
+            seen_pairs = set()
 
-            if not new_pairs:
-                self.logger.warning("Aucune nouvelle paire trouvée sur DexScreener")
-                # Fallback: vérifier les tokens existants en DB
-                return await self._fetch_tokens_from_db()
+            # Scanner chaque factory
+            for factory in self.factories:
+                factory_name = "Aerodrome" if factory == to_checksum_address(AERODROME_FACTORY) else "BaseSwap"
 
-            self.logger.info(f"{len(new_pairs)} paires trouvées sur DexScreener")
-            return new_pairs
+                try:
+                    tokens = self._scan_factory_events(
+                        factory=factory,
+                        factory_name=factory_name,
+                        from_block=from_block,
+                        to_block=to_block,
+                        current_block=current_block,
+                        seen_pairs=seen_pairs
+                    )
+
+                    all_tokens.extend(tokens)
+
+                    if len(all_tokens) >= self.batch_size:
+                        self.logger.info(f"⚠️  Limite {self.batch_size} résultats atteinte")
+                        break
+
+                except Exception as e:
+                    self.logger.warning(f"⚠️  Erreur scan {factory_name}: {e}")
+                    continue
+
+            self.logger.info(f"✅ {len(all_tokens)} tokens détectés")
+            return all_tokens[:self.batch_size]
 
         except Exception as e:
-            self.logger.error(f"Erreur lors de la récupération des nouveaux tokens: {e}")
-            # Fallback sur la DB en cas d'erreur
-            return await self._fetch_tokens_from_db()
+            self.logger.error(f"❌ Erreur scan_tokens_in_age_window: {e}")
+            return []
 
-    async def _fetch_tokens_from_db(self) -> List[Dict]:
-        """
-        Fallback: récupère les tokens depuis la DB pour réanalyse
-        """
-        conn = sqlite3.connect(self.db_path)
-        cursor = conn.cursor()
+    def _scan_factory_events(
+        self,
+        factory: str,
+        factory_name: str,
+        from_block: int,
+        to_block: int,
+        current_block: int,
+        seen_pairs: set
+    ) -> List[Dict]:
+        """Scanne les événements PairCreated d'une factory"""
+        tokens = []
+
         try:
-            # ✅ FIX: ORDER BY id au lieu de created_at pour compatibilité anciennes/nouvelles installations
-            cursor.execute('''
-                SELECT token_address, symbol, name FROM discovered_tokens
-                ORDER BY id DESC
-                LIMIT 10
-            ''')
-            rows = cursor.fetchall()
-            col_names = [description[0] for description in cursor.description]
-            recent_tokens = [dict(zip(col_names, row)) for row in rows]
+            # Découper en chunks pour éviter limites RPC
+            block_range = to_block - from_block
 
-            # Convertir au format attendu
-            formatted_tokens = []
-            for token_row in recent_tokens:
-                token_info = self.dexscreener.get_token_info(token_row['token_address'])
-                if token_info:
-                    formatted_tokens.append({
-                        'tokenAddress': token_row['token_address'],
-                        'baseToken': {
-                            'address': token_row['token_address'],
-                            'symbol': token_row['symbol'],
-                            'name': token_row['name']
-                        },
-                        'priceUsd': token_info.get('price_usd', 0),
-                        'liquidity': {'usd': token_info.get('liquidity_usd', 0)},
-                        'marketCap': token_info.get('market_cap', 0)
+            if block_range > CHUNK_SIZE:
+                self.logger.info(
+                    f"📦 {factory_name}: {block_range} blocs → "
+                    f"{(block_range // CHUNK_SIZE) + 1} chunks"
+                )
+
+            all_logs = []
+            current_from = from_block
+
+            while current_from < to_block:
+                current_to = min(current_from + CHUNK_SIZE, to_block)
+
+                try:
+                    chunk_logs = self.w3.eth.get_logs({
+                        'fromBlock': current_from,
+                        'toBlock': current_to,
+                        'address': factory,
+                        'topics': [PAIR_CREATED_EVENT_SIGNATURE]
                     })
 
-            return formatted_tokens
+                    all_logs.extend(chunk_logs)
+
+                except Exception as e:
+                    self.logger.warning(f"⚠️  Chunk {current_from}-{current_to}: {e}")
+
+                current_from = current_to + 1
+
+            self.logger.info(f"🏭 {factory_name}: {len(all_logs)} événements PairCreated")
+
+            # Décoder les événements
+            for log in all_logs:
+                try:
+                    token_data = self._decode_pair_created_event(
+                        log=log,
+                        factory=factory,
+                        factory_name=factory_name,
+                        current_block=current_block,
+                        seen_pairs=seen_pairs
+                    )
+
+                    if token_data:
+                        tokens.append(token_data)
+
+                except Exception as e:
+                    self.logger.debug(f"Erreur décodage: {e}")
+                    continue
+
+            return tokens
 
         except Exception as e:
-            self.logger.error(f"Erreur lors de la récupération des tokens de la DB: {e}")
+            self.logger.warning(f"❌ Erreur get_logs {factory_name}: {e}")
             return []
-        finally:
-            conn.close()
 
+    def _decode_pair_created_event(
+        self,
+        log,
+        factory: str,
+        factory_name: str,
+        current_block: int,
+        seen_pairs: set
+    ) -> Optional[Dict]:
+        """Décode un événement PairCreated"""
+        try:
+            # Décoder topics
+            token0 = to_checksum_address('0x' + log['topics'][1].hex()[-40:])
+            token1 = to_checksum_address('0x' + log['topics'][2].hex()[-40:])
+            pair_address = to_checksum_address('0x' + log['data'].hex()[26:66])
+
+            # Vérifier si déjà vu
+            if pair_address in seen_pairs:
+                return None
+
+            # Identifier token et base token
+            token_address = None
+            base_token = None
+
+            if token0 in self.base_tokens:
+                base_token = token0
+                token_address = token1
+            elif token1 in self.base_tokens:
+                base_token = token1
+                token_address = token0
+            else:
+                return None  # Ignorer paires non appariées
+
+            # Calculer l'âge
+            block_created = log['blockNumber']
+            age_hours = (current_block - block_created) / BLOCKS_PER_HOUR
+
+            seen_pairs.add(pair_address)
+
+            return {
+                'token_address': token_address,
+                'pair_address': pair_address,
+                'base_token': base_token,
+                'factory': factory,
+                'factory_name': factory_name,
+                'block_created': block_created,
+                'age_hours': age_hours
+            }
+
+        except Exception as e:
+            return None
+
+    def get_token_metadata(self, token_address: str) -> Dict:
+        """Récupère les métadonnées ERC20 d'un token"""
+        try:
+            token_address = to_checksum_address(token_address)
+
+            erc20_abi = [
+                {'constant': True, 'inputs': [], 'name': 'name', 'outputs': [{'name': '', 'type': 'string'}], 'type': 'function'},
+                {'constant': True, 'inputs': [], 'name': 'symbol', 'outputs': [{'name': '', 'type': 'string'}], 'type': 'function'},
+                {'constant': True, 'inputs': [], 'name': 'decimals', 'outputs': [{'name': '', 'type': 'uint8'}], 'type': 'function'},
+            ]
+
+            contract = self.w3.eth.contract(address=token_address, abi=erc20_abi)
+
+            try:
+                name = contract.functions.name().call()
+            except:
+                name = "Unknown"
+
+            try:
+                symbol = contract.functions.symbol().call()
+            except:
+                symbol = "???"
+
+            try:
+                decimals = contract.functions.decimals().call()
+            except:
+                decimals = 18
+
+            return {
+                'name': name,
+                'symbol': symbol,
+                'decimals': decimals
+            }
+
+        except Exception as e:
+            self.logger.warning(f"⚠️  Métadonnées {token_address[:8]}...: {e}")
+            return {'name': 'Unknown', 'symbol': '???', 'decimals': 18}
 
     async def process_token_batch(self, tokens: List[Dict]):
-        """Traite un batch de tokens découverts"""
+        """Traite un batch de tokens et les enregistre en DB"""
+        if not tokens:
+            return
+
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
-        skipped_existing = 0
-        skipped_no_address = 0
-        skipped_no_details = 0
-        skipped_too_young = 0
-        skipped_too_old = 0
-        added = 0
+        new_count = 0
+        existing_count = 0
 
         for token_data in tokens:
             try:
-                # Extraire les données du token
-                token_address = token_data.get('tokenAddress') or token_data.get('baseToken', {}).get('address')
-                if not token_address:
-                    skipped_no_address += 1
-                    continue  # Passer si pas d'adresse
+                # Vérifier si déjà en DB
+                cursor.execute(
+                    "SELECT id FROM discovered_tokens WHERE token_address = ?",
+                    (token_data['token_address'],)
+                )
 
-                # Vérifier si le token existe déjà
-                cursor.execute("SELECT 1 FROM discovered_tokens WHERE token_address = ?", (token_address,))
                 if cursor.fetchone():
-                    skipped_existing += 1
-                    continue  # Passer si déjà enregistré
-
-                # Récupérer les détails on-chain via web3_utils
-                token_details = self.web3_manager.get_token_info(token_address)
-                if not token_details:
-                    skipped_no_details += 1
+                    existing_count += 1
                     continue
 
-                # Récupérer les données de DexScreener
-                pair_data = self.dexscreener.get_token_info(token_address) # Utilise la méthode existante
+                # Enrichir avec métadonnées
+                metadata = self.get_token_metadata(token_data['token_address'])
 
-                # Extraire les infos pertinentes
-                symbol = token_details.get('symbol', 'UNKNOWN')
-                name = token_details.get('name', 'Unknown Token')
-                decimals = token_details.get('decimals', 18)
-                total_supply = str(token_details.get('total_supply', 0))
-                price_usd = pair_data.get('price_usd') if pair_data else None
-                price_eth = pair_data.get('price_native') if pair_data else None
-                liquidity = pair_data.get('liquidity_usd', 0) if pair_data else 0
-                market_cap = pair_data.get('market_cap', 0) if pair_data else 0
-                volume_24h = pair_data.get('volume_24h', 0) if pair_data else 0
-
-                # Convertir pairCreatedAt (timestamp ms) en datetime string
-                pair_created_at = pair_data.get('pairCreatedAt') if pair_data else None
-                pair_created_at_str = None
-                token_age_hours = None
-
-                if pair_created_at:
-                    from datetime import datetime, timezone
-                    try:
-                        dt = datetime.fromtimestamp(pair_created_at / 1000, tz=timezone.utc)
-                        pair_created_at_str = dt.strftime('%Y-%m-%d %H:%M:%S')
-
-                        # 🔧 NOUVEAU: Calculer l'âge du token
-                        token_age_hours = (datetime.now(timezone.utc) - dt).total_seconds() / 3600
-                    except:
-                        pass
-
-                # 🔧 FILTRE D'ÂGE: Ignorer tokens trop jeunes ou trop vieux
-                if token_age_hours is not None:
-                    if token_age_hours < self.min_token_age_hours:
-                        skipped_too_young += 1
-                        self.logger.debug(f"⏭️ Token trop jeune: {symbol} ({token_age_hours:.1f}h < {self.min_token_age_hours}h)")
-                        continue
-
-                    if token_age_hours > self.max_token_age_hours:
-                        skipped_too_old += 1
-                        self.logger.debug(f"⏭️ Token trop vieux: {symbol} ({token_age_hours:.1f}h > {self.max_token_age_hours}h)")
-                        continue
-
-                # Insérer dans la base de données
+                # Insérer en DB
                 cursor.execute('''
-                    INSERT OR IGNORE INTO discovered_tokens
-                    (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth, pair_created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ''', (token_address, symbol, name, decimals, total_supply, liquidity, market_cap, volume_24h, price_usd, price_eth, pair_created_at_str))
+                    INSERT INTO discovered_tokens
+                    (token_address, symbol, name, decimals, pair_address, base_token,
+                     factory, block_created, age_hours)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    token_data['token_address'],
+                    metadata['symbol'],
+                    metadata['name'],
+                    metadata['decimals'],
+                    token_data['pair_address'],
+                    token_data['base_token'],
+                    token_data['factory_name'],
+                    token_data['block_created'],
+                    token_data['age_hours']
+                ))
 
-                age_info = f"({token_age_hours:.1f}h)" if token_age_hours else ""
-                self.logger.info(f"✅ Token découvert: {symbol} {age_info} ({token_address}) - MC: ${market_cap:.2f}")
-                added += 1
+                new_count += 1
 
             except Exception as e:
-                self.logger.error(f"Erreur lors du traitement du token {token_data.get('tokenAddress', 'N/A')}: {e}")
+                self.logger.warning(f"⚠️  Erreur traitement token: {e}")
+                continue
 
         conn.commit()
         conn.close()
 
-        # Log récapitulatif
-        self.logger.info(f"📊 Batch traité: {added} nouveaux | {skipped_existing} déjà connus | {skipped_too_young} trop jeunes | {skipped_too_old} trop vieux | {skipped_no_address} sans adresse | {skipped_no_details} sans détails")
+        self.logger.info(f"📊 Batch traité: {new_count} nouveaux | {existing_count} déjà connus")
 
     async def run(self):
         """Boucle principale du scanner"""
         self.logger.info("Scanner démarré...")
+
         while True:
             try:
-                # Récupérer les nouveaux tokens
-                new_tokens = await self.fetch_new_tokens()
+                # Scanner les tokens
+                tokens = self.scan_tokens_in_age_window()
 
-                if new_tokens:
-                    self.logger.info(f"{len(new_tokens)} nouveaux tokens potentiels trouvés. Traitement...")
-                    await self.process_token_batch(new_tokens)
+                # Traiter le batch
+                if tokens:
+                    await self.process_token_batch(tokens)
+                else:
+                    self.logger.info("Aucun token trouvé dans cette fenêtre")
 
-                # Délai avant le prochain scan
+                # Attendre avant le prochain scan
                 await asyncio.sleep(self.scan_delay)
 
             except KeyboardInterrupt:
-                self.logger.info("Scanner arrêté par l'utilisateur.")
+                self.logger.info("Arrêt du scanner...")
                 break
             except Exception as e:
-                self.logger.error(f"Erreur dans la boucle principale du scanner: {e}")
-                await asyncio.sleep(10)  # Attendre avant de réessayer
+                self.logger.error(f"❌ Erreur dans run(): {e}")
+                await asyncio.sleep(self.scan_delay)
 
-if __name__ == "__main__":
-    scanner = EnhancedScanner()
-    try:
-        asyncio.run(scanner.run())
-    except KeyboardInterrupt:
-        print("\nScanner arrêté.")
-    except Exception as e:
-        print(f"Erreur fatale: {e}")
+
+def main():
+    """Point d'entrée"""
+    scanner = UnifiedScanner()
+    asyncio.run(scanner.run())
+
+
+if __name__ == '__main__':
+    main()
