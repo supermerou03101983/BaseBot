@@ -539,6 +539,42 @@ class AdvancedFilter:
 
                 self.logger.info(f"Analyse du token: {token_dict.get('symbol', 'N/A')} ({token_dict['token_address']})")
 
+                # === ENRICHISSEMENT DEXSCREENER ===
+                # Scanner fournit seulement données on-chain (age_hours, symbol, name, decimals)
+                # Filter enrichit avec données market DexScreener pour scoring
+                try:
+                    token_address = token_dict['token_address']
+                    dex_data = self.dexscreener.get_token_info(token_address)
+
+                    if dex_data:
+                        # Enrichir token_dict avec données DexScreener
+                        token_dict['liquidity'] = dex_data.get('liquidity', 0)
+                        token_dict['market_cap'] = dex_data.get('market_cap', 0)
+                        token_dict['volume_24h'] = dex_data.get('volume_24h', 0)
+                        token_dict['volume_1h'] = dex_data.get('volume_1h', 0)
+                        token_dict['volume_5min'] = dex_data.get('volume_5min', 0)
+                        token_dict['price_change_5m'] = dex_data.get('price_change_5m', 0)
+                        token_dict['price_change_1h'] = dex_data.get('price_change_1h', 0)
+                        token_dict['price_usd'] = dex_data.get('price_usd', 0)
+                        token_dict['holder_count'] = dex_data.get('holder_count', 0)
+                        token_dict['owner_percentage'] = dex_data.get('owner_percentage', 100.0)
+                        token_dict['buy_tax'] = dex_data.get('buy_tax')
+                        token_dict['sell_tax'] = dex_data.get('sell_tax')
+                        token_dict['pair_created_at'] = dex_data.get('pair_created_at')
+
+                        self.logger.debug(f"✅ Enrichissement DexScreener réussi pour {token_dict['symbol']}")
+                    else:
+                        self.logger.warning(f"⚠️ DexScreener: Aucune donnée pour {token_address[:8]}... (token trop récent?)")
+                        # Rejeter si DexScreener ne trouve rien (token non listé ou trop récent)
+                        self.reject_token(token_dict, ["❌ REJET: Token non trouvé sur DexScreener (trop récent ou non listé)"])
+                        continue
+
+                except Exception as e:
+                    self.logger.error(f"❌ Échec enrichissement DexScreener pour {token_address[:8]}...: {e}")
+                    # Rejeter en cas d'échec enrichissement (sécurité)
+                    self.reject_token(token_dict, [f"❌ REJET: Échec enrichissement données market ({str(e)[:50]})"])
+                    continue
+
                 # Calculer le score
                 score, reasons = self.calculate_score(token_dict)
 
