@@ -186,6 +186,8 @@ class RealTrader:
                     amount_in REAL,
                     amount_out REAL,
                     price REAL,
+                    entry_price REAL,
+                    current_price REAL,
                     entry_time TIMESTAMP,
                     exit_time TIMESTAMP,
                     profit_loss REAL,
@@ -1323,12 +1325,12 @@ class RealTrader:
             ''', ('INFO', f'{action} {token["symbol"]} @ ${price:.8f}', token['address'], tx_hash))
 
             if action == 'BUY':
-                # Inserer dans trade_history avec entry_time
+                # Inserer dans trade_history avec entry_time et entry_price
                 cursor.execute('''
                     INSERT INTO trade_history
-                    (token_address, symbol, side, amount_in, price, entry_time, timestamp)
-                    VALUES (?, ?, 'BUY', ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                ''', (token['address'], token['symbol'], amount_eth, price))
+                    (token_address, symbol, side, amount_in, price, entry_price, current_price, entry_time, timestamp)
+                    VALUES (?, ?, 'BUY', ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ''', (token['address'], token['symbol'], amount_eth, price, price, price))
 
             conn.commit()
             conn.close()
