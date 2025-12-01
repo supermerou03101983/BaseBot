@@ -347,9 +347,16 @@ class AdvancedFilter:
 
         # 10. OWNER PERCENTAGE (maximum concentration)
         owner_pct = token_data.get('owner_percentage', 100.0)
-        if owner_pct < 100.0 and owner_pct > self.max_owner_percentage:
-            reasons.append(f"❌ REJET: Owner {owner_pct:.1f}% > {self.max_owner_percentage}% (trop centralisé)")
-            return 0, reasons
+        if owner_pct > self.max_owner_percentage:
+            if owner_pct < 100.0:
+                reasons.append(f"❌ REJET: Owner {owner_pct:.1f}% > {self.max_owner_percentage}% (trop centralisé)")
+                return 0, reasons
+            else:
+                # owner_pct == 100 → non détecté, traiter comme risque modéré
+                self.logger.warning(f"Owner non détecté (100%) pour {token_data.get('symbol', '???')} - risque modéré")
+                # Ne pas rejeter automatiquement, mais noter le risque
+                reasons.append(f"⚠️ WARNING: Owner non détecté (donnée manquante)")
+                pass
 
         # 11. TAXES (maximum frais)
         buy_tax = token_data.get('buy_tax', None)
@@ -371,9 +378,55 @@ class AdvancedFilter:
                 reasons.append(f"❌ REJET: Honeypot détecté")
                 return 0, reasons
         except Exception as e:
-            self.logger.warning(f"Erreur check honeypot pour {token_address}: {e}")
-            # En cas d'erreur API, on passe (pas de rejet)
-            pass
+            self.logger.error(f"ÉCHEC CRITIQUE honeypot check pour {token_address}: {e}")
+            # Sécurité maximale: rejet si impossible de vérifier
+            reasons.append(f"❌ REJET: Impossible de vérifier honeypot (erreur critique)")
+            return 0, reasons
+
+        # === PHASE 1.5: VÉRIFICATIONS ON-CHAIN OBLIGATOIRES ===
+        # Ces vérifications sont CRITIQUES pour atteindre 70%+ win-rate
+        # Car elles détectent les scams que les APIs externes peuvent manquer
+        try:
+            addr = token_data['token_address']
+
+            # Contract verified sur BaseScan ?
+            try:
+                is_verified = self.basescan.is_contract_verified(addr)
+                if not is_verified:
+                    reasons.append(f"❌ REJET: Contrat non vérifié sur BaseScan")
+                    return 0, reasons
+            except Exception as e:
+                self.logger.warning(f"Impossible de vérifier contract verified pour {addr}: {e}")
+                # Si BaseScan API échoue, on continue (pas critique)
+                reasons.append(f"⚠️ WARNING: Vérification contract skipped (API BaseScan indisponible)")
+
+            # Liquidity locked ?
+            try:
+                is_locked = self.basescan.is_liquidity_locked(addr, min_hours=72)
+                if not is_locked:
+                    reasons.append(f"❌ REJET: Liquidité non lockée (minimum 72h requis)")
+                    return 0, reasons
+            except Exception as e:
+                self.logger.warning(f"Impossible de vérifier liquidity lock pour {addr}: {e}")
+                # Lock non vérifiable → risque élevé → rejet par sécurité
+                reasons.append(f"❌ REJET: Impossible de vérifier liquidity lock (sécurité)")
+                return 0, reasons
+
+            # No mint function ?
+            try:
+                has_mint = self.web3_manager.has_mint_function(addr)
+                if has_mint:
+                    reasons.append(f"❌ REJET: Fonction mint détectée (inflation possible)")
+                    return 0, reasons
+            except Exception as e:
+                self.logger.warning(f"Impossible de vérifier mint function pour {addr}: {e}")
+                # Si impossible de vérifier, on continue (fallback: honeypot check a déjà validé)
+                reasons.append(f"⚠️ WARNING: Vérification mint function skipped")
+
+        except Exception as e:
+            self.logger.error(f"ÉCHEC CRITIQUE vérifications on-chain pour {token_address}: {e}")
+            reasons.append(f"❌ REJET: Échec vérification sécurité on-chain")
+            return 0, reasons
 
         # === PHASE 2: SCORING (Si le token a passé tous les rejets) ===
         score = 100.0  # Score parfait par défaut (tous critères passés)
@@ -502,26 +555,38 @@ class AdvancedFilter:
             conn.close()
 
     def run(self):
-        """Boucle principale du filtre"""
+        """Boucle principale du filtre avec watchdog anti-freeze"""
         self.logger.info("Filter démarré...")
         self.logger.info(f"Mode: {self.trading_mode}")
         self.logger.info(f"Seuil de score: {self.score_threshold}")
+
+        last_success = datetime.now()
+        max_silence = timedelta(minutes=20)
 
         while True:
             try:
                 self.logger.info("Démarrage d'un cycle de filtrage...")
                 self.run_filter_cycle()
+                last_success = datetime.now()  # Mise à jour si succès
                 self.logger.info(f"Cycle terminé. Stats: Analyzed={self.stats['total_analyzed']}, Approved={self.stats['total_approved']}, Rejected={self.stats['total_rejected']}")
 
-                # Attendre avant le prochain cycle (ex: 5 minutes)
-                time.sleep(300)
+                # Attendre avant le prochain cycle
+                filter_interval = int(os.getenv('FILTER_INTERVAL_SECONDS', '60'))
+                time.sleep(filter_interval)
 
             except KeyboardInterrupt:
                 self.logger.info("Filter arrêté par l'utilisateur.")
                 break
             except Exception as e:
-                self.logger.error(f"Erreur dans la boucle principale du filter: {e}")
-                time.sleep(10)  # Attendre avant de réessayer
+                self.logger.exception(f"Erreur critique dans run_filter_cycle: {e}")
+
+                # Watchdog: vérifier si le bot est bloqué depuis trop longtemps
+                silence_duration = datetime.now() - last_success
+                if silence_duration > max_silence:
+                    self.logger.critical(f"⚠️ WATCHDOG: Aucun cycle réussi depuis {silence_duration.total_seconds()/60:.1f} min → redémarrage forcé")
+                    os.execv(sys.executable, ['python3'] + sys.argv)  # Redémarrage auto
+
+                time.sleep(30)  # Attendre avant de réessayer
 
 if __name__ == "__main__":
     filter_bot = AdvancedFilter()
