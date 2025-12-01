@@ -88,7 +88,8 @@ class RealTrader:
         
         self.db_path = PROJECT_DIR / 'data' / 'trading.db'
         self.setup_logging()
-        
+        self.init_database()  # Initialiser les tables du Trader
+
         # Web3 setup avec gestion d'erreur
         try:
             self.web3_manager = BaseWeb3Manager(
@@ -168,7 +169,63 @@ class RealTrader:
             ]
         )
         self.logger = logging.getLogger(__name__)
-    
+
+    def init_database(self):
+        """Initialise les tables nécessaires pour le Trader"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Table trade_history (positions)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trade_history (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_address TEXT NOT NULL,
+                    symbol TEXT,
+                    side TEXT,
+                    amount_in REAL,
+                    amount_out REAL,
+                    price REAL,
+                    entry_time TIMESTAMP,
+                    exit_time TIMESTAMP,
+                    profit_loss REAL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            # Table trade_log (logs des transactions)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trade_log (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    level TEXT,
+                    message TEXT,
+                    token_address TEXT,
+                    tx_hash TEXT
+                )
+            ''')
+
+            # Table trailing_level_stats (statistiques trailing stop)
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS trailing_level_stats (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    token_address TEXT,
+                    level INTEGER,
+                    activation_price REAL,
+                    stop_loss_price REAL,
+                    timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                )
+            ''')
+
+            conn.commit()
+            conn.close()
+            self.logger.info("✅ Tables Trader initialisées (trade_history, trade_log, trailing_level_stats)")
+
+        except Exception as e:
+            self.logger.error(f"Erreur initialisation database Trader: {e}")
+            if 'conn' in locals():
+                conn.close()
+
     def load_config(self):
         """Charge la configuration avec nouvelle strategie"""
         # Mode de trading
