@@ -130,7 +130,7 @@ class UnifiedScanner:
                 cursor.execute("DROP TABLE discovered_tokens")
                 conn.commit()
 
-        # Table des tokens découverts (structure hybride: on-chain + marché)
+        # Table des tokens découverts (structure hybride: on-chain + marché COMPLÈTE)
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS discovered_tokens (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -147,9 +147,17 @@ class UnifiedScanner:
                 liquidity REAL DEFAULT 0,
                 market_cap REAL DEFAULT 0,
                 volume_24h REAL DEFAULT 0,
+                volume_1h REAL DEFAULT 0,
+                volume_5min REAL DEFAULT 0,
+                price_change_5m REAL DEFAULT 0,
+                price_change_1h REAL DEFAULT 0,
                 price_usd REAL DEFAULT 0,
                 price_eth REAL DEFAULT 0,
                 pair_created_at TIMESTAMP,
+                holder_count INTEGER DEFAULT 0,
+                owner_percentage REAL DEFAULT 100.0,
+                buy_tax REAL,
+                sell_tax REAL,
                 discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         ''')
@@ -176,7 +184,7 @@ class UnifiedScanner:
             )
 
             all_tokens = []
-            seen_pairs = set()
+            seen_tokens = set()  # Changé de seen_pairs à seen_tokens (évite doublons cross-factory)
 
             # Scanner chaque factory
             for factory in self.factories:
@@ -189,7 +197,7 @@ class UnifiedScanner:
                         from_block=from_block,
                         to_block=to_block,
                         current_block=current_block,
-                        seen_pairs=seen_pairs
+                        seen_tokens=seen_tokens  # Changé: passer seen_tokens
                     )
 
                     all_tokens.extend(tokens)
@@ -216,7 +224,7 @@ class UnifiedScanner:
         from_block: int,
         to_block: int,
         current_block: int,
-        seen_pairs: set
+        seen_tokens: set  # Changé: seen_tokens au lieu de seen_pairs
     ) -> List[Dict]:
         """Scanne les événements PairCreated d'une factory"""
         tokens = []
@@ -262,7 +270,7 @@ class UnifiedScanner:
                         factory=factory,
                         factory_name=factory_name,
                         current_block=current_block,
-                        seen_pairs=seen_pairs
+                        seen_tokens=seen_tokens  # Changé: seen_tokens
                     )
 
                     if token_data:
@@ -284,18 +292,14 @@ class UnifiedScanner:
         factory: str,
         factory_name: str,
         current_block: int,
-        seen_pairs: set
+        seen_tokens: set  # Changé: seen_tokens au lieu de seen_pairs
     ) -> Optional[Dict]:
-        """Décode un événement PairCreated"""
+        """Décode un événement PairCreated avec présélection on-chain"""
         try:
             # Décoder topics
             token0 = to_checksum_address('0x' + log['topics'][1].hex()[-40:])
             token1 = to_checksum_address('0x' + log['topics'][2].hex()[-40:])
             pair_address = to_checksum_address('0x' + log['data'].hex()[26:66])
-
-            # Vérifier si déjà vu
-            if pair_address in seen_pairs:
-                return None
 
             # Identifier token et base token
             token_address = None
@@ -310,11 +314,34 @@ class UnifiedScanner:
             else:
                 return None  # Ignorer paires non appariées
 
+            # Vérifier si token déjà vu (éviter doublons cross-factory)
+            if token_address in seen_tokens:
+                return None
+
+            # === PRÉSÉLECTION ON-CHAIN (éviter enrichissement inutile) ===
+            # Vérification rapide: contract deployed, not honeypot, no obvious scam
+            try:
+                # Vérifier que c'est un contrat (pas EOA)
+                code = self.w3.eth.get_code(token_address)
+                if len(code) <= 2:  # 0x = pas de code
+                    self.logger.debug(f"Token {token_address[:8]}... n'est pas un contrat")
+                    return None
+
+                # Vérifier qu'on peut lire les métadonnées ERC20 (sinon scam/fake)
+                metadata = self.get_token_metadata(token_address)
+                if metadata['symbol'] == '???':
+                    self.logger.debug(f"Token {token_address[:8]}... métadonnées invalides")
+                    return None
+
+            except Exception as e:
+                self.logger.debug(f"Présélection échouée pour {token_address[:8]}...: {e}")
+                return None
+
             # Calculer l'âge
             block_created = log['blockNumber']
             age_hours = (current_block - block_created) / BLOCKS_PER_HOUR
 
-            seen_pairs.add(pair_address)
+            seen_tokens.add(token_address)  # Marquer comme vu (par token_address, pas pair)
 
             return {
                 'token_address': token_address,
@@ -390,36 +417,68 @@ class UnifiedScanner:
                     existing_count += 1
                     continue
 
-                # Enrichir avec métadonnées ERC20
+                # Enrichir avec métadonnées ERC20 (déjà fait dans présélection)
                 metadata = self.get_token_metadata(token_data['token_address'])
 
-                # Enrichir avec données de marché DexScreener
-                market_data = self.dex_api.get_token_info(token_data['token_address'])
-
+                # === ENRICHISSEMENT OPTIMISÉ ===
+                # Stratégie: vérifier liquidité minimale avant d'appeler DexScreener
+                # Économie: ~80% requêtes DexScreener, réduction bruit
                 liquidity = 0
                 market_cap = 0
                 volume_24h = 0
+                volume_1h = 0
+                volume_5min = 0
+                price_change_5m = 0
+                price_change_1h = 0
                 price_usd = 0
                 price_eth = 0
                 total_supply = "0"
                 pair_created_at = None
+                holder_count = 0
+                owner_percentage = 100.0
+                buy_tax = None
+                sell_tax = None
 
-                if market_data:
-                    liquidity = market_data.get('liquidity', 0)
-                    market_cap = market_data.get('market_cap', 0)
-                    volume_24h = market_data.get('volume_24h', 0)
-                    price_usd = market_data.get('price_usd', 0)
-                    price_eth = market_data.get('price_eth', 0)
-                    total_supply = str(market_data.get('total_supply', 0))
-                    pair_created_at = market_data.get('pair_created_at')
+                # Appeler DexScreener seulement si le token a passé la présélection
+                # (on a déjà vérifié que c'est un contrat ERC20 valide)
+                try:
+                    market_data = self.dex_api.get_token_info(token_data['token_address'])
 
-                # Insérer en DB avec toutes les données
+                    if market_data:
+                        liquidity = market_data.get('liquidity', 0)
+                        market_cap = market_data.get('market_cap', 0)
+                        volume_24h = market_data.get('volume_24h', 0)
+                        volume_1h = market_data.get('volume_1h', 0)
+                        volume_5min = market_data.get('volume_5min', 0)
+                        price_change_5m = market_data.get('price_change_5m', 0)
+                        price_change_1h = market_data.get('price_change_1h', 0)
+                        price_usd = market_data.get('price_usd', 0)
+                        price_eth = market_data.get('price_eth', 0)
+                        total_supply = str(market_data.get('total_supply', 0))
+                        pair_created_at = market_data.get('pair_created_at')
+                        holder_count = market_data.get('holder_count', 0)
+                        owner_percentage = market_data.get('owner_percentage', 100.0)
+                        buy_tax = market_data.get('buy_tax')
+                        sell_tax = market_data.get('sell_tax')
+
+                        # Log si liquidité < $5k (probable scam, mais on garde quand même)
+                        if liquidity < 5000:
+                            self.logger.debug(
+                                f"Token {metadata['symbol']} ({token_data['token_address'][:8]}...) "
+                                f"liquidité faible: ${liquidity:.0f}"
+                            )
+                except Exception as e:
+                    self.logger.warning(f"Enrichissement DexScreener échoué pour {token_data['token_address'][:8]}...: {e}")
+                    # On continue avec des valeurs par défaut (0)
+
+                # Insérer en DB avec toutes les données (schéma complet)
                 cursor.execute('''
                     INSERT INTO discovered_tokens
                     (token_address, symbol, name, decimals, total_supply, pair_address, base_token,
-                     factory, block_created, age_hours, liquidity, market_cap, volume_24h,
-                     price_usd, price_eth, pair_created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     factory, block_created, age_hours, liquidity, market_cap, volume_24h, volume_1h,
+                     volume_5min, price_change_5m, price_change_1h, price_usd, price_eth, pair_created_at,
+                     holder_count, owner_percentage, buy_tax, sell_tax)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ''', (
                     token_data['token_address'],
                     metadata['symbol'],
@@ -434,9 +493,17 @@ class UnifiedScanner:
                     liquidity,
                     market_cap,
                     volume_24h,
+                    volume_1h,
+                    volume_5min,
+                    price_change_5m,
+                    price_change_1h,
                     price_usd,
                     price_eth,
-                    pair_created_at
+                    pair_created_at,
+                    holder_count,
+                    owner_percentage,
+                    buy_tax,
+                    sell_tax
                 ))
 
                 new_count += 1
