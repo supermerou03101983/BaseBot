@@ -318,30 +318,14 @@ class UnifiedScanner:
             if token_address in seen_tokens:
                 return None
 
-            # === PRÉSÉLECTION ON-CHAIN (éviter enrichissement inutile) ===
-            # Vérification rapide: contract deployed, not honeypot, no obvious scam
-            try:
-                # Vérifier que c'est un contrat (pas EOA)
-                code = self.w3.eth.get_code(token_address)
-                if len(code) <= 2:  # 0x = pas de code
-                    self.logger.debug(f"Token {token_address[:8]}... n'est pas un contrat")
-                    return None
-
-                # Vérifier qu'on peut lire les métadonnées ERC20 (sinon scam/fake)
-                metadata = self.get_token_metadata(token_address)
-                if metadata['symbol'] == '???':
-                    self.logger.debug(f"Token {token_address[:8]}... métadonnées invalides")
-                    return None
-
-            except Exception as e:
-                self.logger.debug(f"Présélection échouée pour {token_address[:8]}...: {e}")
-                return None
-
             # Calculer l'âge
             block_created = log['blockNumber']
             age_hours = (current_block - block_created) / BLOCKS_PER_HOUR
 
             seen_tokens.add(token_address)  # Marquer comme vu (par token_address, pas pair)
+
+            # Note: Présélection on-chain déplacée dans process_token_batch()
+            # pour éviter de ralentir le décodage des événements
 
             return {
                 'token_address': token_address,
@@ -404,6 +388,7 @@ class UnifiedScanner:
 
         new_count = 0
         existing_count = 0
+        rejected_preselection = 0  # Tokens rejetés par présélection on-chain
 
         for token_data in tokens:
             try:
@@ -417,8 +402,27 @@ class UnifiedScanner:
                     existing_count += 1
                     continue
 
-                # Enrichir avec métadonnées ERC20 (déjà fait dans présélection)
-                metadata = self.get_token_metadata(token_data['token_address'])
+                # === PRÉSÉLECTION ON-CHAIN (éviter enrichissement inutile) ===
+                # Vérifier que c'est un contrat valide avant d'enrichir
+                try:
+                    # 1. Vérifier que c'est un contrat (pas EOA)
+                    code = self.w3.eth.get_code(to_checksum_address(token_data['token_address']))
+                    if len(code) <= 2:  # 0x = pas de code
+                        self.logger.debug(f"Token {token_data['token_address'][:8]}... n'est pas un contrat")
+                        rejected_preselection += 1
+                        continue
+
+                    # 2. Vérifier métadonnées ERC20 valides
+                    metadata = self.get_token_metadata(token_data['token_address'])
+                    if metadata['symbol'] == '???':
+                        self.logger.debug(f"Token {token_data['token_address'][:8]}... métadonnées invalides")
+                        rejected_preselection += 1
+                        continue
+
+                except Exception as e:
+                    self.logger.debug(f"Présélection échouée pour {token_data['token_address'][:8]}...: {e}")
+                    rejected_preselection += 1
+                    continue
 
                 # === ENRICHISSEMENT OPTIMISÉ ===
                 # Stratégie: vérifier liquidité minimale avant d'appeler DexScreener
@@ -515,7 +519,10 @@ class UnifiedScanner:
         conn.commit()
         conn.close()
 
-        self.logger.info(f"📊 Batch traité: {new_count} nouveaux | {existing_count} déjà connus")
+        self.logger.info(
+            f"📊 Batch traité: {new_count} nouveaux | {existing_count} déjà connus | "
+            f"{rejected_preselection} rejetés (présélection)"
+        )
 
     async def run(self):
         """Boucle principale du scanner"""
