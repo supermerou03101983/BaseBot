@@ -512,100 +512,104 @@ with tab5:
     col1, col2 = st.columns(2)
 
     with col1:
-        st.subheader("🎯 Stratégie de Trading")
-        st.metric("Mode", config_data.get('TRADING_MODE', 'N/A').upper())
-        st.metric("Taille Position", f"{config_data.get('POSITION_SIZE_PERCENT', 'N/A')}%")
-        st.metric("Max Positions", config_data.get('MAX_POSITIONS', 'N/A'))
-        st.metric("Max Trades/Jour", config_data.get('MAX_TRADES_PER_DAY', 'N/A'))
-        st.metric("Stop Loss", f"-{config_data.get('STOP_LOSS_PERCENT', 'N/A')}%")
+        st.subheader("🎯 Stratégie: Momentum Safe (Mod #6)")
 
-        # Grace Period - Nouveau!
+        # Mode Trading
+        paper_trading = config_data.get('PAPER_TRADING', 'true').lower() == 'true'
+        mode = "📝 Paper Trading" if paper_trading else "💰 Real Trading"
+        st.metric("Mode", mode)
+
+        # Trader
+        st.metric("Montant/Trade", f"${config_data.get('TRADE_AMOUNT_USD', 'N/A')}")
+        st.metric("Stop Loss Standard", f"-{config_data.get('STOP_LOSS_PERCENT', 'N/A')}%")
+
+        # Grace Period
         grace_enabled = config_data.get('GRACE_PERIOD_ENABLED', 'true').lower() == 'true'
         if grace_enabled:
             st.metric("⏱️ Grace Period",
-                     f"{config_data.get('GRACE_PERIOD_MINUTES', 'N/A')}min @ -{config_data.get('GRACE_PERIOD_STOP_LOSS', 'N/A')}%",
-                     help="Période de tolérance au début de la position avec SL élargi pour éviter sorties prématurées")
+                     f"{config_data.get('GRACE_PERIOD_MINUTES', 'N/A')}min @ -{config_data.get('GRACE_PERIOD_STOP_LOSS', 'N/A')}%")
         else:
-            st.metric("⏱️ Grace Period", "Désactivée", help="Grace Period désactivée dans la configuration")
+            st.metric("⏱️ Grace Period", "Désactivée")
 
-        st.metric("Expiration Tokens", f"{config_data.get('TOKEN_APPROVAL_MAX_AGE_HOURS', 'N/A')}h")
+        st.markdown("---")
 
-        st.subheader("🔍 Scanner")
-        st.text(f"Intervalle: {config_data.get('SCAN_INTERVAL_SECONDS', 'N/A')}s")
-        st.text(f"Max Blocks/Scan: {config_data.get('MAX_BLOCKS_PER_SCAN', 'N/A')}")
+        # Filter - Fenêtre d'âge
+        st.subheader("🔍 Filter - Fenêtre d'Âge")
+        min_filter_age = config_data.get('MIN_AGE_HOURS', 'N/A')
+        max_filter_age = config_data.get('MAX_AGE_HOURS', 'N/A')
+        st.metric("Fenêtre Filtre", f"{min_filter_age}h - {max_filter_age}h",
+                 help="Sweet spot: après scam check, avant pic retail")
 
-        st.markdown("**Filtrage d'Âge:**")
-        min_age = config_data.get('MIN_TOKEN_AGE_HOURS', 'N/A')
-        max_age = config_data.get('MAX_TOKEN_AGE_HOURS', 'N/A')
-        st.text(f"Fenêtre: {min_age}h - {max_age}h")
-        st.caption("Scanner ignore tokens <2h (trop jeunes) et >12h (trop vieux)")
+        # Liquidité & Market Cap
+        st.subheader("💧 Liquidité & Market Cap")
+        min_liq = config_data.get('MIN_LIQUIDITY_USD', 'N/A')
+        max_liq = config_data.get('MAX_LIQUIDITY_USD', 'N/A')
+        st.text(f"Liquidité: ${min_liq} - ${max_liq}")
+
+        min_mc = config_data.get('MIN_MARKET_CAP', 'N/A')
+        max_mc = config_data.get('MAX_MARKET_CAP', 'N/A')
+        st.text(f"Market Cap: ${min_mc} - ${max_mc}")
 
     with col2:
-        st.subheader("📈 Trailing Stop")
-        st.text(f"Activation: +{config_data.get('TRAILING_ACTIVATION_THRESHOLD', 'N/A')}%")
+        st.subheader("📊 Scanner On-Chain (Mod #5)")
+        st.text(f"Intervalle: {config_data.get('SCAN_INTERVAL_SECONDS', 'N/A')}s")
 
-        st.markdown("**Niveaux:**")
-        st.text(f"Niveau 1: {config_data.get('TRAILING_L1_MIN', 'N/A')}-{config_data.get('TRAILING_L1_MAX', 'N/A')}% → -{config_data.get('TRAILING_L1_DISTANCE', 'N/A')}%")
-        st.text(f"Niveau 2: {config_data.get('TRAILING_L2_MIN', 'N/A')}-{config_data.get('TRAILING_L2_MAX', 'N/A')}% → -{config_data.get('TRAILING_L2_DISTANCE', 'N/A')}%")
-        st.text(f"Niveau 3: {config_data.get('TRAILING_L3_MIN', 'N/A')}-{config_data.get('TRAILING_L3_MAX', 'N/A')}% → -{config_data.get('TRAILING_L3_DISTANCE', 'N/A')}%")
-        st.text(f"Niveau 4: {config_data.get('TRAILING_L4_MIN', 'N/A')}%+ → -{config_data.get('TRAILING_L4_DISTANCE', 'N/A')}%")
+        min_scan_age = config_data.get('MIN_TOKEN_AGE_HOURS', 'N/A')
+        max_scan_age = config_data.get('MAX_TOKEN_AGE_HOURS', 'N/A')
+        st.text(f"Fenêtre Scanner: {min_scan_age}h - {max_scan_age}h")
+        st.caption("Scanner détecte événements PairCreated")
 
-        st.subheader("⏱️ Time Exit")
-        st.text(f"Stagnation: {config_data.get('TIME_EXIT_STAGNATION_HOURS', 'N/A')}h si < {config_data.get('TIME_EXIT_STAGNATION_MIN_PROFIT', 'N/A')}%")
-        st.text(f"Low Momentum: {config_data.get('TIME_EXIT_LOW_MOMENTUM_HOURS', 'N/A')}h si < {config_data.get('TIME_EXIT_LOW_MOMENTUM_MIN_PROFIT', 'N/A')}%")
-        st.text(f"Maximum: {config_data.get('TIME_EXIT_MAXIMUM_HOURS', 'N/A')}h force exit")
+        st.markdown("---")
 
-    # Section Filter
-    st.subheader("🎯 Critères de Filtrage")
-    col3, col4, col5 = st.columns(3)
+        # Volume & Momentum
+        st.subheader("📈 Volume & Momentum")
+        vol_1h = config_data.get('MIN_VOLUME_1H', 'N/A')
+        vol_5m = config_data.get('MIN_VOLUME_5MIN', 'N/A')
+        ratio = config_data.get('MIN_VOLUME_RATIO_5M_1H', 'N/A')
+        st.text(f"Volume 1h: ${vol_1h}")
+        st.text(f"Volume 5min: ${vol_5m}")
+        st.text(f"Ratio 5m/1h: ≥{ratio} (accélération)")
 
-    with col3:
-        st.markdown("**Âge & Volume**")
-        st.text(f"Min Âge: {config_data.get('MIN_AGE_HOURS', 'N/A')}h")
-        st.text(f"Min Volume 24h: ${config_data.get('MIN_VOLUME_24H', 'N/A')}")
-        st.text(f"Min Liquidité: ${config_data.get('MIN_LIQUIDITY_USD', 'N/A')}")
+        pc_5m = config_data.get('MIN_PRICE_CHANGE_5MIN', 'N/A')
+        pc_1h = config_data.get('MIN_PRICE_CHANGE_1H', 'N/A')
+        st.text(f"Δ Prix 5min: ≥+{pc_5m}%")
+        st.text(f"Δ Prix 1h: ≥+{pc_1h}%")
 
-    with col4:
-        st.markdown("**Market Cap**")
-        st.text(f"Min: ${config_data.get('MIN_MARKET_CAP', 'N/A')}")
-        st.text(f"Max: ${config_data.get('MAX_MARKET_CAP', 'N/A')}")
-        st.markdown("**Holders**")
-        st.text(f"Min: {config_data.get('MIN_HOLDERS', 'N/A')}")
+        st.markdown("---")
 
-    with col5:
-        st.markdown("**Taxes & Scores**")
-        st.text(f"Max Buy Tax: {config_data.get('MAX_BUY_TAX', 'N/A')}%")
-        st.text(f"Max Sell Tax: {config_data.get('MAX_SELL_TAX', 'N/A')}%")
-        st.text(f"Min Safety Score: {config_data.get('MIN_SAFETY_SCORE', 'N/A')}")
+        # Distribution & Sécurité
+        st.subheader("🛡️ Distribution & Sécurité")
+        holders = config_data.get('MIN_HOLDERS', 'N/A')
+        owner = config_data.get('MAX_OWNER_PERCENTAGE', 'N/A')
+        st.text(f"Holders: ≥{holders}")
+        st.text(f"Owner: ≤{owner}%")
 
-    # Historique des trailing stops qui ont été déclenchés
-    st.subheader("📊 Historique Trailing Stops Déclenchés")
+        buy_tax = config_data.get('MAX_BUY_TAX', 'N/A')
+        sell_tax = config_data.get('MAX_SELL_TAX', 'N/A')
+        st.text(f"Buy Tax: ≤{buy_tax}%")
+        st.text(f"Sell Tax: ≤{sell_tax}%")
 
-    trailing_history = pd.read_sql_query("""
+    # Résumé stratégie
+    st.markdown("---")
+    st.info("🎯 **Stratégie Momentum Safe (Mod #6)**: Fenêtre 3.5-8h, 12 critères stricts, cible 3-4 tokens/jour avec ≥70% win-rate")
+
+    # Stats de sortie (raisons)
+    st.subheader("📊 Raisons de Sortie")
+
+    exit_reasons = pd.read_sql_query("""
         SELECT
-            th.symbol,
-            th.entry_time,
-            th.exit_time,
-            th.profit_loss,
-            ROUND((JULIANDAY(th.exit_time) - JULIANDAY(th.entry_time)) * 24, 1) as duration_hours,
-            tls.level as trailing_level,
-            tls.activation_price,
-            tls.stop_loss_price
-        FROM trade_history th
-        LEFT JOIN trailing_level_stats tls ON th.token_address = tls.token_address
-        WHERE th.exit_time IS NOT NULL
-        AND tls.level IS NOT NULL
-        ORDER BY th.exit_time DESC
+            reason,
+            COUNT(*) as count,
+            ROUND(AVG(profit_loss_percent), 2) as avg_profit_pct
+        FROM trade_history
+        WHERE exit_time IS NOT NULL AND reason IS NOT NULL
+        GROUP BY reason
+        ORDER BY count DESC
         LIMIT 10
     """, conn)
 
-    if not trailing_history.empty:
-        trailing_history['profit_loss'] = trailing_history['profit_loss'].apply(lambda x: f"{x:.2f}%" if x else "N/A")
-        trailing_history['activation_price'] = trailing_history['activation_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
-        trailing_history['stop_loss_price'] = trailing_history['stop_loss_price'].apply(lambda x: f"${x:.8f}" if x else "N/A")
-        trailing_history['duration_hours'] = trailing_history['duration_hours'].apply(lambda x: f"{x:.1f}h" if x else "N/A")
-        trailing_history.columns = ['Symbol', 'Entrée', 'Sortie', 'Profit', 'Durée', 'Niveau', 'Prix Max', 'Stop Loss']
-        st.dataframe(trailing_history, use_container_width=True)
+    if not exit_reasons.empty:
+        st.dataframe(exit_reasons, use_container_width=True)
     else:
         st.info("Aucun trailing stop déclenché pour le moment")
 
