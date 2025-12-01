@@ -402,27 +402,17 @@ class UnifiedScanner:
                     existing_count += 1
                     continue
 
-                # === PRÉSÉLECTION ON-CHAIN (éviter enrichissement inutile) ===
-                # Vérifier que c'est un contrat valide avant d'enrichir
+                # === PRÉSÉLECTION ON-CHAIN DÉSACTIVÉE TEMPORAIREMENT ===
+                # Raison: 265 appels get_code() trop lent (>1min)
+                # Stratégie: Laisser Filter.py faire la présélection
+                # TODO: Réactiver avec batching RPC multicall si nécessaire
+
+                # Enrichir métadonnées ERC20 (tentative, fallback si échec)
                 try:
-                    # 1. Vérifier que c'est un contrat (pas EOA)
-                    code = self.w3.eth.get_code(to_checksum_address(token_data['token_address']))
-                    if len(code) <= 2:  # 0x = pas de code
-                        self.logger.debug(f"Token {token_data['token_address'][:8]}... n'est pas un contrat")
-                        rejected_preselection += 1
-                        continue
-
-                    # 2. Vérifier métadonnées ERC20 valides
                     metadata = self.get_token_metadata(token_data['token_address'])
-                    if metadata['symbol'] == '???':
-                        self.logger.debug(f"Token {token_data['token_address'][:8]}... métadonnées invalides")
-                        rejected_preselection += 1
-                        continue
-
                 except Exception as e:
-                    self.logger.debug(f"Présélection échouée pour {token_data['token_address'][:8]}...: {e}")
-                    rejected_preselection += 1
-                    continue
+                    self.logger.warning(f"Métadonnées échouées pour {token_data['token_address'][:8]}...: {e}")
+                    metadata = {'symbol': '???', 'name': 'Unknown', 'decimals': 18}
 
                 # === ENRICHISSEMENT OPTIMISÉ ===
                 # Stratégie: vérifier liquidité minimale avant d'appeler DexScreener
