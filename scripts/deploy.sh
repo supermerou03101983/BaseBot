@@ -336,22 +336,30 @@ DATABASE_PATH=/home/basebot/trading-bot/data/trading.db
 BACKUP_PATH=/home/basebot/trading-bot/data/backups/
 
 # ============================================
-# ⚙️ TRADING STRATEGY
+# ⚙️ TRADER - Gestion des Positions
 # ============================================
-TRADING_MODE=paper
-POSITION_SIZE_PERCENT=15
-MAX_POSITIONS=2
-MAX_TRADES_PER_DAY=3
-STOP_LOSS_PERCENT=5
-TRAILING_ACTIVATION_THRESHOLD=12
-MONITORING_INTERVAL=1
-TOKEN_APPROVAL_MAX_AGE_HOURS=12
-REJECTED_TOKEN_COOLDOWN_MINUTES=30
 
-# Grace Period - Période de tolérance au début d'une position
+# Mode de trading (true = simulation, false = réel)
+PAPER_TRADING=true
+
+# Montant par trade (USD)
+TRADE_AMOUNT_USD=10
+
+# Stop-loss standard (%)
+STOP_LOSS_PERCENT=15
+
+# Take-profit (%)
+TAKE_PROFIT_PERCENT=30
+
+# Grace Period - Protection Initiale
 GRACE_PERIOD_ENABLED=true
-GRACE_PERIOD_MINUTES=3
-GRACE_PERIOD_STOP_LOSS=35
+GRACE_PERIOD_MINUTES=5
+GRACE_PERIOD_STOP_LOSS=25
+
+# Advanced
+BUY_DELAY_SECONDS=5
+MONITORING_INTERVAL=10
+LOSING_TOKEN_COOLDOWN_HOURS=24
 
 # ============================================
 # 🔍 SCANNER ON-CHAIN (Modification #5)
@@ -370,61 +378,46 @@ UNISWAP_V3_FACTORY=0x33128a8fC17869897dcE68Ed026d694621f6FDfD
 AERODROME_FACTORY=0x420DD381b31aEf6683db6B902084cB0FFECe40Da
 
 # ============================================
-# 🎯 FILTER CONFIGURATION
+# 🎯 FILTER CONFIGURATION - Momentum Safe (Modification #6)
 # ============================================
-# ⚠️ IMPORTANT: Ces valeurs sont optimisées pour trouver des tokens
-#               2h+ après leur création (évite les scams précoces)
-#               et profiter du pump avec un win rate ~75%
-# Ne modifiez ces valeurs que si vous comprenez la stratégie!
+# Stratégie optimisée pour 3-4 tokens/jour, win-rate ≥70%, sécurité maximale
+# Fenêtre: tokens 3.5-8h (après scam check, avant pic retail)
+# ⚠️ IMPORTANT: Ne modifiez ces valeurs que si vous comprenez la stratégie!
 
 FILTER_INTERVAL_SECONDS=60
 
-# Critères principaux (stratégie optimisée - Modification #1)
-# ⚠️ IMPORTANT: Ces valeurs ont été assouplies après tests
-#               pour permettre le trading sur tokens 2-12h d'âge
-MIN_AGE_HOURS=2
-MIN_LIQUIDITY_USD=5000    # Assoupliss de $30K à $5K (Mod #1)
-MIN_VOLUME_24H=3000       # Assoupliss de $30K à $3K (Mod #1)
-MIN_HOLDERS=50            # Assoupliss de 150 à 50 (Mod #1)
-MIN_MARKET_CAP=5000       # Assoupliss de $25K à $5K (Mod #1)
-MAX_MARKET_CAP=10000000
-MAX_LIQUIDITY_USD=10000000
-MAX_BUY_TAX=5
-MAX_SELL_TAX=5
-MAX_SLIPPAGE=3
+# Âge du token (heures) - Fenêtre stricte
+MIN_AGE_HOURS=3.5
+MAX_AGE_HOURS=8.0
 
-# Scores de sécurité et potentiel
-MIN_SAFETY_SCORE=50       # Assoupliss de 70 à 50 (Mod #1)
-MIN_POTENTIAL_SCORE=40    # Assoupliss de 60 à 40 (Mod #1)
+# Liquidité (USD)
+MIN_LIQUIDITY_USD=12000
+MAX_LIQUIDITY_USD=2000000
 
-# ============================================
-# 📈 TRAILING STOP CONFIGURATION
-# ============================================
-TRAILING_L1_MIN=12
-TRAILING_L1_MAX=30
-TRAILING_L1_DISTANCE=3
+# Market Cap (USD)
+MIN_MARKET_CAP=80000
+MAX_MARKET_CAP=2500000
 
-TRAILING_L2_MIN=30
-TRAILING_L2_MAX=100
-TRAILING_L2_DISTANCE=5
+# Volume (USD)
+MIN_VOLUME_1H=4000
+MIN_VOLUME_5MIN=800
+MIN_VOLUME_RATIO_5M_1H=0.3
 
-TRAILING_L3_MIN=100
-TRAILING_L3_MAX=300
-TRAILING_L3_DISTANCE=10
+# Momentum prix (%)
+MIN_PRICE_CHANGE_5MIN=4.0
+MIN_PRICE_CHANGE_1H=7.0
 
-TRAILING_L4_MIN=300
-TRAILING_L4_MAX=99999
-TRAILING_L4_DISTANCE=30
+# Distribution
+MIN_HOLDERS=120
+MAX_OWNER_PERCENTAGE=5.0
 
-# ============================================
-# ⏱️ TIME EXIT CONFIGURATION
-# ============================================
-TIME_EXIT_STAGNATION_HOURS=24
-TIME_EXIT_STAGNATION_MIN_PROFIT=5
-TIME_EXIT_LOW_MOMENTUM_HOURS=48
-TIME_EXIT_LOW_MOMENTUM_MIN_PROFIT=20
-TIME_EXIT_MAXIMUM_HOURS=72
-TIME_EXIT_EMERGENCY_HOURS=120
+# Taxes
+MAX_BUY_TAX=3
+MAX_SELL_TAX=3
+
+# Scores (assouplis pour test initial)
+MIN_SAFETY_SCORE=50
+MIN_POTENTIAL_SCORE=40
 
 # ============================================
 # 🌐 API SERVER
@@ -437,10 +430,7 @@ API_KEY=
 # ============================================
 # 📊 DASHBOARD
 # ============================================
-DASHBOARD_PORT=8501
-DASHBOARD_URL=http://localhost:8501
-DASHBOARD_USER=admin
-DASHBOARD_PASSWORD=
+DASHBOARD_PORT=3000
 
 # ============================================
 # 📝 LOGGING
