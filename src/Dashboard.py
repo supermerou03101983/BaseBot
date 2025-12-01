@@ -430,7 +430,7 @@ with tab4:
     history_df = pd.read_sql_query("""
         SELECT
             symbol,
-            price as entry_price,
+            entry_price,
             amount_in,
             amount_out,
             profit_loss as profit_gross,
