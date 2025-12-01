@@ -414,9 +414,11 @@ class UnifiedScanner:
                     self.logger.warning(f"Métadonnées échouées pour {token_data['token_address'][:8]}...: {e}")
                     metadata = {'symbol': '???', 'name': 'Unknown', 'decimals': 18}
 
-                # === ENRICHISSEMENT OPTIMISÉ ===
-                # Stratégie: vérifier liquidité minimale avant d'appeler DexScreener
-                # Économie: ~80% requêtes DexScreener, réduction bruit
+                # === ENRICHISSEMENT DÉSACTIVÉ (DexScreener trop lent) ===
+                # Problème: 262 requêtes DexScreener → timeout >5min
+                # Solution: Scanner enregistre seulement données on-chain
+                # Filter appellera DexScreener pour tokens qui passent critères on-chain
+
                 liquidity = 0
                 market_cap = 0
                 volume_24h = 0
@@ -433,37 +435,8 @@ class UnifiedScanner:
                 buy_tax = None
                 sell_tax = None
 
-                # Appeler DexScreener seulement si le token a passé la présélection
-                # (on a déjà vérifié que c'est un contrat ERC20 valide)
-                try:
-                    market_data = self.dex_api.get_token_info(token_data['token_address'])
-
-                    if market_data:
-                        liquidity = market_data.get('liquidity', 0)
-                        market_cap = market_data.get('market_cap', 0)
-                        volume_24h = market_data.get('volume_24h', 0)
-                        volume_1h = market_data.get('volume_1h', 0)
-                        volume_5min = market_data.get('volume_5min', 0)
-                        price_change_5m = market_data.get('price_change_5m', 0)
-                        price_change_1h = market_data.get('price_change_1h', 0)
-                        price_usd = market_data.get('price_usd', 0)
-                        price_eth = market_data.get('price_eth', 0)
-                        total_supply = str(market_data.get('total_supply', 0))
-                        pair_created_at = market_data.get('pair_created_at')
-                        holder_count = market_data.get('holder_count', 0)
-                        owner_percentage = market_data.get('owner_percentage', 100.0)
-                        buy_tax = market_data.get('buy_tax')
-                        sell_tax = market_data.get('sell_tax')
-
-                        # Log si liquidité < $5k (probable scam, mais on garde quand même)
-                        if liquidity < 5000:
-                            self.logger.debug(
-                                f"Token {metadata['symbol']} ({token_data['token_address'][:8]}...) "
-                                f"liquidité faible: ${liquidity:.0f}"
-                            )
-                except Exception as e:
-                    self.logger.warning(f"Enrichissement DexScreener échoué pour {token_data['token_address'][:8]}...: {e}")
-                    # On continue avec des valeurs par défaut (0)
+                # Note: Filter.py enrichira avec DexScreener uniquement pour tokens
+                # qui passent les vérifications on-chain (contract verified, etc.)
 
                 # Insérer en DB avec toutes les données (schéma complet)
                 cursor.execute('''
