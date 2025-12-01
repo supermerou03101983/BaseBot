@@ -159,38 +159,65 @@ class AdvancedFilter:
             self.logger.error(f"Erreur chargement mode trading: {e}")
             self.trading_mode = 'paper' # Valeur par défaut
 
-        # Règles de filtrage
+        # Règles de filtrage - Stratégie Momentum Safe (Mod #6)
         try:
-            # Utiliser les variables standardisées du .env
-            self.min_market_cap = float(os.getenv('MIN_MARKET_CAP', '25000'))
-            self.max_market_cap = float(os.getenv('MAX_MARKET_CAP', '10000000'))
-            self.min_liquidity = float(os.getenv('MIN_LIQUIDITY_USD', '30000'))
-            self.max_liquidity = float(os.getenv('MAX_LIQUIDITY_USD', '10000000'))
-            self.min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '50000'))
-            self.min_age_hours = float(os.getenv('MIN_AGE_HOURS', '2'))
-            self.min_holders = int(os.getenv('MIN_HOLDERS', '150'))
-            self.max_owner_percentage = float(os.getenv('MAX_OWNER_PERCENTAGE', '10.0'))
-            self.max_buy_tax = float(os.getenv('MAX_BUY_TAX', '5.0'))
-            self.max_sell_tax = float(os.getenv('MAX_SELL_TAX', '5.0'))
-            self.min_safety_score = float(os.getenv('MIN_SAFETY_SCORE', '70.0'))
-            self.min_potential_score = float(os.getenv('MIN_POTENTIAL_SCORE', '60.0'))
-            self.score_threshold = float(os.getenv('MIN_SAFETY_SCORE', '70.0'))  # Utilise MIN_SAFETY_SCORE comme seuil
+            # Fenêtre d'âge stricte (3.5-8h)
+            self.min_age_hours = float(os.getenv('MIN_AGE_HOURS', '3.5'))
+            self.max_age_hours = float(os.getenv('MAX_AGE_HOURS', '8.0'))
+
+            # Liquidité saine
+            self.min_liquidity = float(os.getenv('MIN_LIQUIDITY_USD', '12000'))
+            self.max_liquidity = float(os.getenv('MAX_LIQUIDITY_USD', '2000000'))
+
+            # Market cap viable
+            self.min_market_cap = float(os.getenv('MIN_MARKET_CAP', '80000'))
+            self.max_market_cap = float(os.getenv('MAX_MARKET_CAP', '2500000'))
+
+            # Volume momentum (1h et 5min)
+            self.min_volume_1h = float(os.getenv('MIN_VOLUME_1H', '4000'))
+            self.min_volume_5min = float(os.getenv('MIN_VOLUME_5MIN', '800'))
+            self.min_volume_ratio_5m_1h = float(os.getenv('MIN_VOLUME_RATIO_5M_1H', '0.3'))
+            self.min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '0'))  # Optionnel pour Momentum Safe
+
+            # Momentum prix
+            self.min_price_change_5min = float(os.getenv('MIN_PRICE_CHANGE_5MIN', '4.0'))
+            self.min_price_change_1h = float(os.getenv('MIN_PRICE_CHANGE_1H', '7.0'))
+
+            # Distribution saine
+            self.min_holders = int(os.getenv('MIN_HOLDERS', '120'))
+            self.max_owner_percentage = float(os.getenv('MAX_OWNER_PERCENTAGE', '5.0'))
+
+            # Taxes raisonnables
+            self.max_buy_tax = float(os.getenv('MAX_BUY_TAX', '3.0'))
+            self.max_sell_tax = float(os.getenv('MAX_SELL_TAX', '3.0'))
+
+            # Scores
+            self.min_safety_score = float(os.getenv('MIN_SAFETY_SCORE', '50.0'))
+            self.min_potential_score = float(os.getenv('MIN_POTENTIAL_SCORE', '40.0'))
+            self.score_threshold = float(os.getenv('MIN_SAFETY_SCORE', '50.0'))
+
         except ValueError as e:
-            self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut.")
-            # Définir des valeurs par défaut si le parsing échoue
-            self.min_market_cap = 25000
-            self.max_market_cap = 10000000
-            self.min_liquidity = 30000
-            self.max_liquidity = 10000000
-            self.min_volume_24h = 50000
-            self.min_age_hours = 2
-            self.min_holders = 150
-            self.max_owner_percentage = 10.0
-            self.max_buy_tax = 5.0
-            self.max_sell_tax = 5.0
-            self.min_safety_score = 70.0
-            self.min_potential_score = 60.0
-            self.score_threshold = 70.0
+            self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut Momentum Safe.")
+            # Valeurs par défaut Momentum Safe
+            self.min_age_hours = 3.5
+            self.max_age_hours = 8.0
+            self.min_liquidity = 12000
+            self.max_liquidity = 2000000
+            self.min_market_cap = 80000
+            self.max_market_cap = 2500000
+            self.min_volume_1h = 4000
+            self.min_volume_5min = 800
+            self.min_volume_ratio_5m_1h = 0.3
+            self.min_volume_24h = 0
+            self.min_price_change_5min = 4.0
+            self.min_price_change_1h = 7.0
+            self.min_holders = 120
+            self.max_owner_percentage = 5.0
+            self.max_buy_tax = 3.0
+            self.max_sell_tax = 3.0
+            self.min_safety_score = 50.0
+            self.min_potential_score = 40.0
+            self.score_threshold = 50.0
 
 
     def load_blacklist(self):
@@ -214,183 +241,159 @@ class AdvancedFilter:
 
     def calculate_score(self, token_data: Dict) -> Tuple[float, List[str]]:
         """
-        Calcule un score de qualité basé sur les critères de filtrage.
-        Retourne (score, liste_raisons_positive)
+        Stratégie Momentum Safe (Modification #6)
+        Filtre strict avec rejets automatiques AVANT tout calcul de score.
+        Cible: 3-4 tokens/jour avec ≥70% win-rate
         """
-        score = 0.0
         reasons = []
 
         # Vérifier la blacklist
         if self.is_blacklisted(token_data['token_address']):
-            return 0.0, ["Blacklisted"]
+            return 0.0, ["❌ REJET: Blacklisted"]
 
-        # --- Critères d'analyse ---
-        # Market Cap
-        mc = token_data.get('market_cap', 0)
-        if self.min_market_cap <= mc <= self.max_market_cap:
-            score += 20
-            reasons.append(f"MC (${mc:,.2f}) OK")
-        elif mc < self.min_market_cap:
-            reasons.append(f"MC (${mc:,.2f}) < min (${self.min_market_cap:,.2f})")
-        else:
-            reasons.append(f"MC (${mc:,.2f}) > max (${self.max_market_cap:,.2f})")
+        # === FALLBACK VOLUME 5MIN ===
+        # DexScreener ne retourne pas toujours volume_5min, on l'estime
+        if "volume_5min" not in token_data or token_data.get("volume_5min", 0) == 0:
+            token_data["volume_5min"] = token_data.get("volume_1h", 0) * 0.2
 
-        # Liquidity (avec MAX_LIQUIDITY)
-        liquidity = token_data.get('liquidity', 0)
-        if self.min_liquidity <= liquidity <= self.max_liquidity:
-            score += 15
-            reasons.append(f"Liquidity (${liquidity:,.2f}) OK")
-        elif liquidity < self.min_liquidity:
-            reasons.append(f"Liquidity (${liquidity:,.2f}) < min (${self.min_liquidity:,.2f})")
-        else:
-            reasons.append(f"Liquidity (${liquidity:,.2f}) > max (${self.max_liquidity:,.2f})")
+        # === PHASE 1: REJETS AUTOMATIQUES (Critères stricts) ===
 
-        # Volume 24h et 1h (Modification #4 - Accepter Vol24h faible si Vol1h fort)
-        # Pour tokens récents (3-4h), Volume 24h peut être $0 mais Vol 1h fort = pump actif
-        volume_24h = token_data.get('volume_24h', 0)
-        volume_1h = token_data.get('volume_1h', 0)
-
-        # Vérification Volume 1h d'abord (activité récente = prioritaire)
-        min_volume_1h = float(os.getenv('MIN_VOLUME_1H', 20))
-        if volume_1h < min_volume_1h:
-            reasons.append(f"❌ REJET: Volume 1h (${volume_1h:,.2f}) < min (${min_volume_1h:,.2f}) - Pas d'activité récente")
-            return 0, reasons  # Rejet automatique - token sans activité
-
-        score += 10
-        reasons.append(f"✅ Volume 1h (${volume_1h:,.2f}) OK - Activité récente confirmée")
-
-        # Volume 24h - Accepter $0 si Volume 1h suffisant (tokens très récents)
-        if volume_24h < self.min_volume_24h:
-            if volume_1h >= min_volume_1h:
-                # Exception: Vol24h faible/nul mais Vol1h fort = Token récent en pump
-                score += 5
-                reasons.append(f"⚠️ Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f}) MAIS Vol1h fort → ACCEPTÉ")
-            else:
-                # Les deux volumes sont faibles = rejet
-                reasons.append(f"❌ REJET: Volume 24h (${volume_24h:,.2f}) < min (${self.min_volume_24h:,.2f}) ET Vol1h faible")
-                return 0, reasons
-        else:
-            score += 10
-            reasons.append(f"Volume 24h (${volume_24h:,.2f}) OK")
-
-        # Age (si disponible) - Doit avoir AU MOINS min_age_hours
-        # ✅ FIX: Utiliser pair_created_at (date blockchain) au lieu de created_at (date découverte)
+        # 1. ÂGE (fenêtre stricte 3.5-8h)
         pair_created_at = token_data.get('pair_created_at')
+        age_hours = 0
+
         if pair_created_at:
             try:
                 from datetime import timezone
-                # Parser le format "2025-11-09 11:51:36"
                 if 'T' in pair_created_at:
-                    # Format ISO avec T
                     token_creation_date = datetime.fromisoformat(pair_created_at.replace('Z', '+00:00'))
                 else:
-                    # Format "YYYY-MM-DD HH:MM:SS"
                     token_creation_date = datetime.strptime(pair_created_at, '%Y-%m-%d %H:%M:%S')
                     token_creation_date = token_creation_date.replace(tzinfo=timezone.utc)
 
                 age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
 
-                if age_hours >= self.min_age_hours:
-                    score += 10
-                    reasons.append(f"Age ({age_hours:.1f}h) >= min ({self.min_age_hours}h)")
-                else:
-                    reasons.append(f"Age ({age_hours:.1f}h) < min ({self.min_age_hours}h)")
+                if age_hours < self.min_age_hours:
+                    reasons.append(f"❌ REJET: Âge {age_hours:.1f}h < {self.min_age_hours}h (trop jeune, risque scam)")
+                    return 0, reasons
+
+                if age_hours > self.max_age_hours:
+                    reasons.append(f"❌ REJET: Âge {age_hours:.1f}h > {self.max_age_hours}h (trop vieux, pump fini)")
+                    return 0, reasons
+
             except Exception as e:
-                reasons.append(f"Age non vérifié (erreur: {str(e)[:50]})")
-
-        # Momentum haussier 5min (Modification #3 - Nouveau)
-        # Confirme momentum immédiat (évite rebonds techniques de dumps)
-        min_price_change_5m = float(os.getenv('MIN_PRICE_CHANGE_5M', 2))
-        price_change_5m = token_data.get('price_change_5m', 0)
-
-        if price_change_5m < min_price_change_5m:
-            reasons.append(f"❌ REJET: Prix 5min ({price_change_5m:+.2f}%) < min (+{min_price_change_5m:.0f}%) - Pas de momentum immédiat")
+                reasons.append(f"❌ REJET: Âge non calculable (erreur: {str(e)[:50]})")
+                return 0, reasons
+        else:
+            reasons.append("❌ REJET: pair_created_at manquant")
             return 0, reasons
 
-        score += 5  # Bonus pour momentum immédiat
-        reasons.append(f"✅ Momentum 5min ({price_change_5m:+.2f}%) OK - Momentum immédiat confirmé")
-
-        # Momentum haussier 1h (Modification #3 - Assoupli à +3%)
-        # Rejette les tokens sans tendance haussière confirmée
-        min_price_change_1h = float(os.getenv('MIN_PRICE_CHANGE_1H', 3))
-        price_change_1h = token_data.get('price_change_1h', 0)
-
-        if price_change_1h < min_price_change_1h:
-            reasons.append(f"❌ REJET: Prix 1h ({price_change_1h:+.2f}%) < min (+{min_price_change_1h:.0f}%) - Pas de tendance haussière")
+        # 2. LIQUIDITÉ (fenêtre stricte $12k-$2M)
+        liq = token_data.get('liquidity', 0)
+        if liq < self.min_liquidity:
+            reasons.append(f"❌ REJET: Liquidité ${liq:,.0f} < ${self.min_liquidity:,.0f} (trop faible, manipulation)")
+            return 0, reasons
+        if liq > self.max_liquidity:
+            reasons.append(f"❌ REJET: Liquidité ${liq:,.0f} > ${self.max_liquidity:,.0f} (trop élevée, institutionnel)")
             return 0, reasons
 
-        score += 10  # Bonus pour tendance générale
-        reasons.append(f"✅ Momentum 1h ({price_change_1h:+.2f}%) OK - Tendance haussière confirmée")
-        
-        # Holders (SEMI-STRICT - Fix #2 ajusté)
-        # ⚠️ API Base Network ne retourne pas toujours les holders
-        # On pénalise fortement au lieu de rejeter automatiquement
+        # 3. MARKET CAP (fenêtre stricte $80k-$2.5M)
+        mc = token_data.get('market_cap', 0)
+        if mc < self.min_market_cap:
+            reasons.append(f"❌ REJET: Market Cap ${mc:,.0f} < ${self.min_market_cap:,.0f} (trop petit)")
+            return 0, reasons
+        if mc > self.max_market_cap:
+            reasons.append(f"❌ REJET: Market Cap ${mc:,.0f} > ${self.max_market_cap:,.0f} (trop gros)")
+            return 0, reasons
+
+        # 4. VOLUME 1H (minimum activité)
+        vol1h = token_data.get('volume_1h', 0)
+        if vol1h < self.min_volume_1h:
+            reasons.append(f"❌ REJET: Volume 1h ${vol1h:,.0f} < ${self.min_volume_1h:,.0f} (pas d'activité)")
+            return 0, reasons
+
+        # 5. VOLUME 5MIN (minimum activité immédiate)
+        vol5m = token_data.get('volume_5min', 0)
+        if vol5m < self.min_volume_5min:
+            reasons.append(f"❌ REJET: Volume 5min ${vol5m:,.0f} < ${self.min_volume_5min:,.0f} (momentum mort)")
+            return 0, reasons
+
+        # 6. RATIO VOLUME 5M/1H (vérifier accélération)
+        ratio_5m_1h = vol5m / vol1h if vol1h > 0 else 0
+        if ratio_5m_1h < self.min_volume_ratio_5m_1h:
+            reasons.append(f"❌ REJET: Ratio vol 5m/1h {ratio_5m_1h:.2f} < {self.min_volume_ratio_5m_1h} (ralentissement)")
+            return 0, reasons
+
+        # 7. MOMENTUM PRIX 5MIN (minimum momentum immédiat)
+        pc5m = token_data.get('price_change_5m', 0)
+        if pc5m < self.min_price_change_5min:
+            reasons.append(f"❌ REJET: Δ Prix 5min {pc5m:+.1f}% < +{self.min_price_change_5min}% (pas de momentum)")
+            return 0, reasons
+
+        # 8. MOMENTUM PRIX 1H (minimum tendance confirmée)
+        pc1h = token_data.get('price_change_1h', 0)
+        if pc1h < self.min_price_change_1h:
+            reasons.append(f"❌ REJET: Δ Prix 1h {pc1h:+.1f}% < +{self.min_price_change_1h}% (tendance faible)")
+            return 0, reasons
+
+        # 9. HOLDERS (minimum distribution)
         holders = token_data.get('holder_count', 0)
-        if holders == 0:
-            # Pas de rejet auto, mais pénalité sévère (-5 points)
-            score -= 5
-            reasons.append(f"⚠️ Holders inconnu (API Base) - Pénalité -5 pts")
-        elif holders >= self.min_holders:
-            score += 10
-            reasons.append(f"Holders ({holders}) OK")
-        else:
-            # Holders insuffisant = pénalité forte (-10 points)
-            score -= 10
-            reasons.append(f"⚠️ Holders ({holders}) < min ({self.min_holders}) - Pénalité -10 pts")
+        if holders < self.min_holders:
+            reasons.append(f"❌ REJET: Holders {holders} < {self.min_holders} (distribution insuffisante)")
+            return 0, reasons
 
-        # Owner percentage (si disponible via BaseScan)
-        # ⚠️ TEMPORAIREMENT DÉSACTIVÉ: L'API Base retourne toujours 100%
-        # TODO: Réactiver quand l'API Etherscan Base fonctionnera
+        # 10. OWNER PERCENTAGE (maximum concentration)
         owner_pct = token_data.get('owner_percentage', 100.0)
-        if owner_pct < 100.0:  # Seulement si on a une vraie valeur
-            if owner_pct <= self.max_owner_percentage:
-                score += 15
-                reasons.append(f"Owner % ({owner_pct:.2f}%) OK")
-            else:
-                reasons.append(f"Owner % ({owner_pct:.2f}%) > max ({self.max_owner_percentage:.2f}%)")
-        else:
-            # Ne pas pénaliser si API ne fonctionne pas
-            score += 7  # Bonus partiel par défaut
-            reasons.append(f"Owner % non disponible (API Base)")
+        if owner_pct < 100.0 and owner_pct > self.max_owner_percentage:
+            reasons.append(f"❌ REJET: Owner {owner_pct:.1f}% > {self.max_owner_percentage}% (trop centralisé)")
+            return 0, reasons
 
-        # Taxes (SEMI-STRICT - Fix #3 ajusté)
-        # ⚠️ API Base Network ne retourne pas toujours les taxes
-        # On pénalise fortement au lieu de rejeter automatiquement
+        # 11. TAXES (maximum frais)
         buy_tax = token_data.get('buy_tax', None)
         sell_tax = token_data.get('sell_tax', None)
 
-        if buy_tax is None or sell_tax is None:
-            # Pas de rejet auto, mais pénalité sévère (-10 points)
-            score -= 10
-            reasons.append(f"⚠️ Taxes inconnues (API échec) - Pénalité -10 pts")
-        elif buy_tax <= self.max_buy_tax and sell_tax <= self.max_sell_tax:
-            score += 15
-            reasons.append(f"Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) OK")
-        else:
-            # Taxes trop élevées = REJET AUTOMATIQUE (ça c'est critique!)
-            reasons.append(f"❌ REJET: Taxes (B:{buy_tax:.2f}%, S:{sell_tax:.2f}%) > max (B:{self.max_buy_tax:.2f}%, S:{self.max_sell_tax:.2f}%)")
-            return 0, reasons  # Rejet si taxes connues ET trop élevées
+        if buy_tax is not None and buy_tax > self.max_buy_tax:
+            reasons.append(f"❌ REJET: Buy Tax {buy_tax:.1f}% > {self.max_buy_tax}% (trop élevé)")
+            return 0, reasons
 
-        # Données on-chain (détails du contrat, honeypot, etc.) - via web3_utils
-        # 🔧 FIX: Honeypot = REJET AUTOMATIQUE (pas juste pénalité)
+        if sell_tax is not None and sell_tax > self.max_sell_tax:
+            reasons.append(f"❌ REJET: Sell Tax {sell_tax:.1f}% > {self.max_sell_tax}% (trop élevé)")
+            return 0, reasons
+
+        # 12. HONEYPOT CHECK (rejet automatique si honeypot)
         try:
             token_address = token_data['token_address']
             honeypot_check = self.web3_manager.check_honeypot(token_address)
-            if not honeypot_check.get('is_honeypot', True): # Si ce n'est PAS un honeypot
-                score += 15
-                reasons.append("Passed honeypot check")
-            else:
-                # ❌ REJET AUTOMATIQUE si honeypot détecté
-                reasons.append(f"❌ REJET: Honeypot détecté (is_honeypot={honeypot_check.get('is_honeypot')})")
+            if honeypot_check.get('is_honeypot', True):
+                reasons.append(f"❌ REJET: Honeypot détecté")
                 return 0, reasons
         except Exception as e:
-            self.logger.warning(f"Erreur check honeypot pour {token_data['token_address']}: {e}")
-            # En cas d'erreur API, pénalité mais pas rejet automatique
-            reasons.append("⚠️ Honeypot check failed (erreur API) - pénalité -10")
-            score -= 10
+            self.logger.warning(f"Erreur check honeypot pour {token_address}: {e}")
+            # En cas d'erreur API, on passe (pas de rejet)
+            pass
 
-        # Limiter le score à 100
-        score = min(score, 100.0)
+        # === PHASE 2: SCORING (Si le token a passé tous les rejets) ===
+        score = 100.0  # Score parfait par défaut (tous critères passés)
+
+        # Log d'approbation (pour debug)
+        symbol = token_data.get('symbol', '???')
+        self.logger.info(
+            f"✅ APPROUVÉ: {symbol} | "
+            f"age={age_hours:.1f}h | liq=${liq:,.0f} | mc=${mc:,.0f} | "
+            f"vol1h=${vol1h:,.0f} | vol5m=${vol5m:,.0f} | "
+            f"Δ5m={pc5m:+.1f}% | Δ1h={pc1h:+.1f}% | holders={holders}"
+        )
+
+        reasons.append(f"✅ Token approuvé: {symbol}")
+        reasons.append(f"Âge: {age_hours:.1f}h")
+        reasons.append(f"Liquidité: ${liq:,.0f}")
+        reasons.append(f"Market Cap: ${mc:,.0f}")
+        reasons.append(f"Volume 1h: ${vol1h:,.0f}")
+        reasons.append(f"Volume 5min: ${vol5m:,.0f}")
+        reasons.append(f"Ratio vol 5m/1h: {ratio_5m_1h:.2f}")
+        reasons.append(f"Δ Prix 5min: {pc5m:+.1f}%")
+        reasons.append(f"Δ Prix 1h: {pc1h:+.1f}%")
+        reasons.append(f"Holders: {holders}")
 
         return score, reasons
 
