@@ -259,33 +259,36 @@ class AdvancedFilter:
         # === PHASE 1: REJETS AUTOMATIQUES (Critères stricts) ===
 
         # 1. ÂGE (fenêtre stricte 3.5-8h)
-        pair_created_at = token_data.get('pair_created_at')
-        age_hours = 0
+        # PRIORITÉ: age_hours du Scanner on-chain (fiable) > pair_created_at DexScreener
+        age_hours = token_data.get('age_hours', 0)
 
-        if pair_created_at:
-            try:
-                from datetime import timezone
-                if 'T' in pair_created_at:
-                    token_creation_date = datetime.fromisoformat(pair_created_at.replace('Z', '+00:00'))
-                else:
-                    token_creation_date = datetime.strptime(pair_created_at, '%Y-%m-%d %H:%M:%S')
-                    token_creation_date = token_creation_date.replace(tzinfo=timezone.utc)
+        if age_hours == 0:
+            # Fallback: calculer depuis pair_created_at si age_hours manque
+            pair_created_at = token_data.get('pair_created_at')
+            if pair_created_at:
+                try:
+                    from datetime import timezone
+                    if 'T' in pair_created_at:
+                        token_creation_date = datetime.fromisoformat(pair_created_at.replace('Z', '+00:00'))
+                    else:
+                        token_creation_date = datetime.strptime(pair_created_at, '%Y-%m-%d %H:%M:%S')
+                        token_creation_date = token_creation_date.replace(tzinfo=timezone.utc)
 
-                age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
-
-                if age_hours < self.min_age_hours:
-                    reasons.append(f"❌ REJET: Âge {age_hours:.1f}h < {self.min_age_hours}h (trop jeune, risque scam)")
+                    age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
+                except Exception as e:
+                    reasons.append(f"❌ REJET: Âge non calculable (erreur: {str(e)[:50]})")
                     return 0, reasons
-
-                if age_hours > self.max_age_hours:
-                    reasons.append(f"❌ REJET: Âge {age_hours:.1f}h > {self.max_age_hours}h (trop vieux, pump fini)")
-                    return 0, reasons
-
-            except Exception as e:
-                reasons.append(f"❌ REJET: Âge non calculable (erreur: {str(e)[:50]})")
+            else:
+                reasons.append("❌ REJET: Âge non disponible (ni age_hours ni pair_created_at)")
                 return 0, reasons
-        else:
-            reasons.append("❌ REJET: pair_created_at manquant")
+
+        # Vérifier fenêtre d'âge
+        if age_hours < self.min_age_hours:
+            reasons.append(f"❌ REJET: Âge {age_hours:.1f}h < {self.min_age_hours}h (trop jeune, risque scam)")
+            return 0, reasons
+
+        if age_hours > self.max_age_hours:
+            reasons.append(f"❌ REJET: Âge {age_hours:.1f}h > {self.max_age_hours}h (trop vieux, pump fini)")
             return 0, reasons
 
         # 2. LIQUIDITÉ (fenêtre stricte $12k-$2M)
