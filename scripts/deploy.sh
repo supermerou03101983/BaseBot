@@ -310,8 +310,14 @@ if [ ! -f "$BOT_DIR/config/.env" ]; then
 # ============================================
 # 🌐 BLOCKCHAIN CONFIGURATION
 # ============================================
-# RPC Base Network (RPC stable recommandé)
+# RPC Base Network (RPC principal)
 RPC_URL=https://mainnet.base.org
+
+# RPC de backup (utilisés automatiquement si RPC principal échoue)
+RPC_BACKUP_1=https://base.publicnode.com
+RPC_BACKUP_2=https://base.meowrpc.com
+RPC_BACKUP_3=https://base.llamarpc.com
+
 BASE_CHAIN_ID=8453
 
 WETH_ADDRESS=0x4200000000000000000000000000000000000006

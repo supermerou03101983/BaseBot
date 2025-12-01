@@ -68,12 +68,20 @@ class UnifiedScanner:
         self.min_token_age_hours = float(os.getenv('MIN_TOKEN_AGE_HOURS', '2'))
         self.max_token_age_hours = float(os.getenv('MAX_TOKEN_AGE_HOURS', '12'))
 
-        # Web3 setup pour scanner on-chain
-        rpc_url = os.getenv('RPC_URL', 'https://mainnet.base.org')
-        self.w3 = Web3(Web3.HTTPProvider(rpc_url))
+        # Liste des RPC avec fallback automatique
+        self.rpc_urls = [
+            os.getenv('RPC_URL', 'https://mainnet.base.org'),
+            os.getenv('RPC_BACKUP_1', 'https://base.publicnode.com'),
+            os.getenv('RPC_BACKUP_2', 'https://base.meowrpc.com'),
+            os.getenv('RPC_BACKUP_3', 'https://base.llamarpc.com')
+        ]
+        self.current_rpc_index = 0
 
-        if not self.w3.is_connected():
-            raise ConnectionError(f"❌ Impossible de se connecter au RPC: {rpc_url}")
+        # Web3 setup avec premier RPC
+        self.w3 = self._connect_to_rpc()
+
+        if not self.w3 or not self.w3.is_connected():
+            raise ConnectionError(f"❌ Impossible de se connecter à aucun RPC")
 
         self.logger.info(f"✅ Connecté au RPC Base (bloc: {self.w3.eth.block_number})")
 
@@ -109,6 +117,50 @@ class UnifiedScanner:
             ]
         )
         self.logger = logging.getLogger(__name__)
+
+    def _connect_to_rpc(self) -> Optional[Web3]:
+        """Connecte au RPC en essayant tous les RPC disponibles"""
+        for i, rpc_url in enumerate(self.rpc_urls):
+            try:
+                self.logger.info(f"🔌 Tentative connexion RPC {i+1}/{len(self.rpc_urls)}: {rpc_url}")
+                w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+                if w3.is_connected():
+                    block_number = w3.eth.block_number
+                    self.current_rpc_index = i
+                    self.logger.info(f"✅ Connecté au RPC {i+1} (bloc: {block_number})")
+                    return w3
+                else:
+                    self.logger.warning(f"⚠️  RPC {i+1} non connecté")
+            except Exception as e:
+                self.logger.warning(f"⚠️  RPC {i+1} échoué: {e}")
+                continue
+
+        return None
+
+    def _switch_to_next_rpc(self) -> bool:
+        """Bascule vers le prochain RPC disponible"""
+        start_index = self.current_rpc_index
+
+        for attempt in range(len(self.rpc_urls)):
+            next_index = (start_index + attempt + 1) % len(self.rpc_urls)
+            rpc_url = self.rpc_urls[next_index]
+
+            try:
+                self.logger.warning(f"🔄 Basculement vers RPC {next_index+1}/{len(self.rpc_urls)}: {rpc_url}")
+                w3 = Web3(Web3.HTTPProvider(rpc_url))
+
+                if w3.is_connected():
+                    self.w3 = w3
+                    self.current_rpc_index = next_index
+                    self.logger.info(f"✅ Basculement réussi vers RPC {next_index+1}")
+                    return True
+            except Exception as e:
+                self.logger.warning(f"⚠️  RPC {next_index+1} échoué: {e}")
+                continue
+
+        self.logger.error("❌ Aucun RPC disponible")
+        return False
 
     def init_database(self):
         """Initialise la base de données"""
@@ -256,7 +308,27 @@ class UnifiedScanner:
                     all_logs.extend(chunk_logs)
 
                 except Exception as e:
+                    error_str = str(e)
                     self.logger.warning(f"⚠️  Chunk {current_from}-{current_to}: {e}")
+
+                    # Si erreur 503 ou timeout, essayer de basculer vers RPC backup
+                    if '503' in error_str or 'timeout' in error_str.lower() or 'unavailable' in error_str.lower():
+                        self.logger.warning(f"🔄 Erreur RPC détectée, tentative de basculement...")
+                        if self._switch_to_next_rpc():
+                            # Retry avec le nouveau RPC
+                            try:
+                                chunk_logs = self.w3.eth.get_logs({
+                                    'fromBlock': current_from,
+                                    'toBlock': current_to,
+                                    'address': factory,
+                                    'topics': [PAIR_CREATED_EVENT_SIGNATURE]
+                                })
+                                all_logs.extend(chunk_logs)
+                                self.logger.info(f"✅ Retry réussi avec nouveau RPC")
+                            except Exception as retry_error:
+                                self.logger.error(f"❌ Retry échoué: {retry_error}")
+                        else:
+                            self.logger.error(f"❌ Impossible de basculer vers un RPC de backup")
 
                 current_from = current_to + 1
 
