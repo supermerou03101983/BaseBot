@@ -176,7 +176,7 @@ class RealTrader:
             conn = sqlite3.connect(self.db_path)
             cursor = conn.cursor()
 
-            # Table trade_history (positions)
+            # Table trade_history (positions) - Schema complet Dashboard-compatible
             cursor.execute('''
                 CREATE TABLE IF NOT EXISTS trade_history (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -191,6 +191,9 @@ class RealTrader:
                     entry_time TIMESTAMP,
                     exit_time TIMESTAMP,
                     profit_loss REAL,
+                    profit_loss_percent REAL,
+                    reason TEXT,
+                    duration_hours REAL,
                     timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 )
             ''')
@@ -1349,15 +1352,24 @@ class RealTrader:
             # amount_out = amount_in * (1 + profit/100)
             amount_out_eth = position.amount_eth * (1 + profit / 100)
 
+            # Calculer la durée de la position (en heures)
+            if position.entry_time:
+                duration = (datetime.now() - position.entry_time).total_seconds() / 3600
+            else:
+                duration = 0
+
             # MISE A JOUR de la ligne existante (BUY) avec les donnees de sortie
             cursor.execute('''
                 UPDATE trade_history
                 SET amount_out = ?,
                     exit_time = CURRENT_TIMESTAMP,
-                    profit_loss = ?
+                    profit_loss = ?,
+                    profit_loss_percent = ?,
+                    reason = ?,
+                    duration_hours = ?
                 WHERE token_address = ?
                 AND exit_time IS NULL
-            ''', (amount_out_eth, profit, position.token_address))
+            ''', (amount_out_eth, profit, profit, reason, duration, position.token_address))
 
             if cursor.rowcount == 0:
                 self.logger.warning(f"Aucune position ouverte trouvee pour {position.symbol} dans trade_history")
