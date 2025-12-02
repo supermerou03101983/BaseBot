@@ -368,6 +368,22 @@ MONITORING_INTERVAL=10
 LOSING_TOKEN_COOLDOWN_HOURS=24
 
 # ============================================
+# 🔐 TRADER RPC - Protection MEV/Frontrun
+# ============================================
+# Protège le Trader contre les attaques MEV (frontrun/sandwich) en mode réel
+# dRPC offre RPC privé avec protection anti-MEV intégrée
+# ⚠️ Inscrivez-vous sur https://drpc.org pour obtenir votre API Key
+
+# API Key dRPC (service RPC protégé anti-MEV)
+DRPC_API_KEY=YOUR_DRPC_API_KEY_HERE
+
+# RPC principal pour le Trader (protégé contre MEV)
+RPC_TRADER_URL=https://base.drpc.org
+
+# RPC de secours pour le Trader
+RPC_TRADER_BACKUP=https://base.meowrpc.com
+
+# ============================================
 # 🔍 SCANNER ON-CHAIN (Modification #5)
 # ============================================
 # Scanner unifié qui détecte les nouveaux tokens via événements PairCreated
@@ -424,6 +440,15 @@ MAX_SELL_TAX=3
 # Scores (assouplis pour test initial)
 MIN_SAFETY_SCORE=50
 MIN_POTENTIAL_SCORE=40
+
+# ============================================
+# 🔄 RETRY LOGIC - Système de Retry Progressif (Modification #6)
+# ============================================
+# Activer le système de retry progressif (true/false)
+# Si true: tokens rejetés pour liquidité/volume/momentum seront ré-analysés
+# Si false: tous les rejets sont définitifs (comportement original)
+# Délais de retry: liquidité/volume = 30min, momentum = 12min, distribution = 120min
+ENABLE_RETRY_LOGIC=true
 
 # ============================================
 # 🌐 API SERVER

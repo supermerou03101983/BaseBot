@@ -74,6 +74,7 @@ def init_database():
     ''')
     
     # Table rejected_tokens (schéma aligné avec filter.py)
+    # ✅ RETRY LOGIC: Ajout de next_check_at pour système de retry progressif (Modification #6)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS rejected_tokens (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,7 +83,8 @@ def init_database():
             name TEXT,
             reason TEXT,
             analysis_data TEXT,
-            rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            next_check_at TIMESTAMP
         )
     ''')
     
@@ -186,6 +188,7 @@ def init_database():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_discovered_pair_created ON discovered_tokens(pair_created_at DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_approved_address ON approved_tokens(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_rejected_address ON rejected_tokens(token_address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_rejected_next_check ON rejected_tokens(next_check_at)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_token ON trade_history(token_address)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_time ON trade_history(timestamp DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_log_time ON trade_log(timestamp DESC)')
