@@ -429,12 +429,17 @@ class DexScreenerAPI:
             else:
                 volume_24h = 0
 
+            # Calculer volume 5min (estimation basée sur volume 1h)
+            # Hypothèse: volume réparti uniformément sur 1h
+            volume_5min = volume_h1 / 12.0 if volume_h1 > 0 else 0
+
             return {
                 'price_usd': float(pair.get('priceUsd', 0)),
                 'price_native': float(pair.get('priceNative', 0)),
-                'liquidity_usd': float(pair.get('liquidity', {}).get('usd', 0)),
+                'liquidity': float(pair.get('liquidity', {}).get('usd', 0)),  # Fix: 'liquidity' au lieu de 'liquidity_usd'
                 'volume_24h': volume_24h,
                 'volume_1h': volume_h1,
+                'volume_5min': volume_5min,  # Fix: Ajout volume_5min estimé
                 'price_change_5m': float(pair.get('priceChange', {}).get('m5', 0)),
                 'price_change_1h': float(pair.get('priceChange', {}).get('h1', 0)),
                 'price_change_24h': float(pair.get('priceChange', {}).get('h24', 0)),
@@ -449,7 +454,13 @@ class DexScreenerAPI:
                 'pair_address': pair.get('pairAddress'),
                 'dex_id': pair.get('dexId'),
                 'chain_id': pair.get('chainId'),
-                'pairCreatedAt': pair.get('pairCreatedAt')  # Date de création du pair (timestamp ms)
+                'pair_created_at': pair.get('pairCreatedAt'),  # Fix: 'pair_created_at' au lieu de 'pairCreatedAt'
+                # Note: holder_count, owner_percentage, buy_tax, sell_tax ne sont pas disponibles dans DexScreener
+                # Ces données doivent être enrichies par d'autres sources (BaseScan, etc.)
+                'holder_count': 0,  # Non disponible sur DexScreener
+                'owner_percentage': 100.0,  # Non disponible sur DexScreener (défaut: risque max)
+                'buy_tax': None,  # Non disponible sur DexScreener
+                'sell_tax': None  # Non disponible sur DexScreener
             }
         except Exception as e:
             print(f"Erreur parsing pair data: {e}")
