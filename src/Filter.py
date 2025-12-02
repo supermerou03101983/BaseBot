@@ -125,9 +125,17 @@ class AdvancedFilter:
                 name TEXT,
                 reason TEXT, -- Raison du rejet
                 analysis_data TEXT, -- JSON avec les détails de l'analyse
-                rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                rejected_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                next_check_at TIMESTAMP DEFAULT NULL -- NULL = jamais retry (sécurité), sinon datetime retry
             )
         ''')
+
+        # Migration: ajouter next_check_at si table existante sans cette colonne
+        try:
+            cursor.execute("SELECT next_check_at FROM rejected_tokens LIMIT 1")
+        except sqlite3.OperationalError:
+            self.logger.info("Migration: Ajout colonne next_check_at à rejected_tokens")
+            cursor.execute("ALTER TABLE rejected_tokens ADD COLUMN next_check_at TIMESTAMP DEFAULT NULL")
 
         # Table des règles de filtrage (optionnel, pour suivi)
         cursor.execute('''
@@ -196,6 +204,9 @@ class AdvancedFilter:
             self.min_potential_score = float(os.getenv('MIN_POTENTIAL_SCORE', '40.0'))
             self.score_threshold = float(os.getenv('MIN_SAFETY_SCORE', '50.0'))
 
+            # Système de retry progressif
+            self.retry_logic_enabled = os.getenv('ENABLE_RETRY_LOGIC', 'true').lower() == 'true'
+
         except ValueError as e:
             self.logger.error(f"Erreur parsing config filtre: {e}. Utilisation des valeurs par défaut Momentum Safe.")
             # Valeurs par défaut Momentum Safe
@@ -239,17 +250,62 @@ class AdvancedFilter:
         """Vérifie si un token est sur la liste noire"""
         return token_address.lower() in [addr.lower() for addr in self.blacklist]
 
-    def calculate_score(self, token_data: Dict) -> Tuple[float, List[str]]:
+    def _determine_retry_delay(self, rejection_reason: str) -> Optional[timedelta]:
+        """
+        Détermine le délai avant prochain retry basé sur la raison du rejet.
+
+        Returns:
+            timedelta: Délai avant retry
+            None: Ne jamais retry (problèmes de sécurité permanents)
+        """
+        reason_lower = rejection_reason.lower()
+
+        # Cas 1: Problèmes de sécurité → JAMAIS retry
+        security_keywords = ['honeypot', 'contrat non vérifié', 'mint détectée',
+                            'liquidity lock', 'blacklisted']
+        if any(keyword in reason_lower for keyword in security_keywords):
+            return None
+
+        # Cas 2: Problèmes de liquidité/volume → Retry dans 30 minutes
+        liquidity_keywords = ['liquidité', 'market cap', 'volume']
+        if any(keyword in reason_lower for keyword in liquidity_keywords):
+            return timedelta(minutes=30)
+
+        # Cas 3: Problèmes de momentum/prix → Retry dans 12 minutes
+        momentum_keywords = ['prix', 'momentum', 'ratio vol']
+        if any(keyword in reason_lower for keyword in momentum_keywords):
+            return timedelta(minutes=12)
+
+        # Cas 4: Problèmes de distribution (owner %) → Retry dans 120 minutes
+        distribution_keywords = ['owner', 'holders', 'centralisé', 'distribution']
+        if any(keyword in reason_lower for keyword in distribution_keywords):
+            return timedelta(minutes=120)
+
+        # Cas 5: Âge → Ne jamais retry (l'âge ne peut qu'augmenter)
+        if 'âge' in reason_lower or 'age' in reason_lower:
+            return None
+
+        # Défaut: Retry dans 30 minutes pour raisons non catégorisées
+        return timedelta(minutes=30)
+
+    def calculate_score(self, token_data: Dict) -> Tuple[float, List[str], Optional[datetime]]:
         """
         Stratégie Momentum Safe (Modification #6)
         Filtre strict avec rejets automatiques AVANT tout calcul de score.
         Cible: 3-4 tokens/jour avec ≥70% win-rate
+
+        Returns:
+            Tuple[float, List[str], Optional[datetime]]:
+                - score: Score du token (0-100)
+                - reasons: Liste des raisons de rejet/approbation
+                - next_check_at: Datetime du prochain retry (None = jamais retry)
         """
         reasons = []
 
         # Vérifier la blacklist
         if self.is_blacklisted(token_data['token_address']):
-            return 0.0, ["❌ REJET: Blacklisted"]
+            rejection_reason = "❌ REJET: Blacklisted"
+            return 0.0, [rejection_reason], None  # Ne jamais retry les blacklistés
 
         # === FALLBACK VOLUME 5MIN ===
         # DexScreener ne retourne pas toujours volume_5min, on l'estime
@@ -276,81 +332,118 @@ class AdvancedFilter:
 
                     age_hours = (datetime.now(timezone.utc) - token_creation_date).total_seconds() / 3600
                 except Exception as e:
-                    reasons.append(f"❌ REJET: Âge non calculable (erreur: {str(e)[:50]})")
-                    return 0, reasons
+                    rejection_reason = f"❌ REJET: Âge non calculable (erreur: {str(e)[:50]})"
+                    reasons.append(rejection_reason)
+                    retry_delay = self._determine_retry_delay(rejection_reason)
+                    next_check = datetime.now() + retry_delay if retry_delay else None
+                    return 0, reasons, next_check
             else:
-                reasons.append("❌ REJET: Âge non disponible (ni age_hours ni pair_created_at)")
-                return 0, reasons
+                rejection_reason = "❌ REJET: Âge non disponible (ni age_hours ni pair_created_at)"
+                reasons.append(rejection_reason)
+                retry_delay = self._determine_retry_delay(rejection_reason)
+                next_check = datetime.now() + retry_delay if retry_delay else None
+                return 0, reasons, next_check
 
         # Vérifier fenêtre d'âge
         if age_hours < self.min_age_hours:
-            reasons.append(f"❌ REJET: Âge {age_hours:.1f}h < {self.min_age_hours}h (trop jeune, risque scam)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Âge {age_hours:.1f}h < {self.min_age_hours}h (trop jeune, risque scam)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Âge → jamais retry
 
         if age_hours > self.max_age_hours:
-            reasons.append(f"❌ REJET: Âge {age_hours:.1f}h > {self.max_age_hours}h (trop vieux, pump fini)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Âge {age_hours:.1f}h > {self.max_age_hours}h (trop vieux, pump fini)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Âge → jamais retry
 
         # 2. LIQUIDITÉ (fenêtre stricte $12k-$2M)
         liq = token_data.get('liquidity', 0)
         if liq < self.min_liquidity:
-            reasons.append(f"❌ REJET: Liquidité ${liq:,.0f} < ${self.min_liquidity:,.0f} (trop faible, manipulation)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Liquidité ${liq:,.0f} < ${self.min_liquidity:,.0f} (trop faible, manipulation)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
         if liq > self.max_liquidity:
-            reasons.append(f"❌ REJET: Liquidité ${liq:,.0f} > ${self.max_liquidity:,.0f} (trop élevée, institutionnel)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Liquidité ${liq:,.0f} > ${self.max_liquidity:,.0f} (trop élevée, institutionnel)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Liquidité trop haute → jamais retry
 
         # 3. MARKET CAP (fenêtre stricte $80k-$2.5M)
         mc = token_data.get('market_cap', 0)
         if mc < self.min_market_cap:
-            reasons.append(f"❌ REJET: Market Cap ${mc:,.0f} < ${self.min_market_cap:,.0f} (trop petit)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Market Cap ${mc:,.0f} < ${self.min_market_cap:,.0f} (trop petit)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
         if mc > self.max_market_cap:
-            reasons.append(f"❌ REJET: Market Cap ${mc:,.0f} > ${self.max_market_cap:,.0f} (trop gros)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Market Cap ${mc:,.0f} > ${self.max_market_cap:,.0f} (trop gros)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Market cap trop haut → jamais retry
 
         # 4. VOLUME 1H (minimum activité)
         vol1h = token_data.get('volume_1h', 0)
         if vol1h < self.min_volume_1h:
-            reasons.append(f"❌ REJET: Volume 1h ${vol1h:,.0f} < ${self.min_volume_1h:,.0f} (pas d'activité)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Volume 1h ${vol1h:,.0f} < ${self.min_volume_1h:,.0f} (pas d'activité)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 5. VOLUME 5MIN (minimum activité immédiate)
         vol5m = token_data.get('volume_5min', 0)
         if vol5m < self.min_volume_5min:
-            reasons.append(f"❌ REJET: Volume 5min ${vol5m:,.0f} < ${self.min_volume_5min:,.0f} (momentum mort)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Volume 5min ${vol5m:,.0f} < ${self.min_volume_5min:,.0f} (momentum mort)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 6. RATIO VOLUME 5M/1H (vérifier accélération)
         ratio_5m_1h = vol5m / vol1h if vol1h > 0 else 0
         if ratio_5m_1h < self.min_volume_ratio_5m_1h:
-            reasons.append(f"❌ REJET: Ratio vol 5m/1h {ratio_5m_1h:.2f} < {self.min_volume_ratio_5m_1h} (ralentissement)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Ratio vol 5m/1h {ratio_5m_1h:.2f} < {self.min_volume_ratio_5m_1h} (ralentissement)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 7. MOMENTUM PRIX 5MIN (minimum momentum immédiat)
         pc5m = token_data.get('price_change_5m', 0)
         if pc5m < self.min_price_change_5min:
-            reasons.append(f"❌ REJET: Δ Prix 5min {pc5m:+.1f}% < +{self.min_price_change_5min}% (pas de momentum)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Δ Prix 5min {pc5m:+.1f}% < +{self.min_price_change_5min}% (pas de momentum)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 8. MOMENTUM PRIX 1H (minimum tendance confirmée)
         pc1h = token_data.get('price_change_1h', 0)
         if pc1h < self.min_price_change_1h:
-            reasons.append(f"❌ REJET: Δ Prix 1h {pc1h:+.1f}% < +{self.min_price_change_1h}% (tendance faible)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Δ Prix 1h {pc1h:+.1f}% < +{self.min_price_change_1h}% (tendance faible)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 9. HOLDERS (minimum distribution)
         holders = token_data.get('holder_count', 0)
         if holders < self.min_holders:
-            reasons.append(f"❌ REJET: Holders {holders} < {self.min_holders} (distribution insuffisante)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Holders {holders} < {self.min_holders} (distribution insuffisante)"
+            reasons.append(rejection_reason)
+            retry_delay = self._determine_retry_delay(rejection_reason)
+            next_check = datetime.now() + retry_delay if retry_delay else None
+            return 0, reasons, next_check
 
         # 10. OWNER PERCENTAGE (maximum concentration)
         owner_pct = token_data.get('owner_percentage', 100.0)
         if owner_pct > self.max_owner_percentage:
             if owner_pct < 100.0:
-                reasons.append(f"❌ REJET: Owner {owner_pct:.1f}% > {self.max_owner_percentage}% (trop centralisé)")
-                return 0, reasons
+                rejection_reason = f"❌ REJET: Owner {owner_pct:.1f}% > {self.max_owner_percentage}% (trop centralisé)"
+                reasons.append(rejection_reason)
+                retry_delay = self._determine_retry_delay(rejection_reason)
+                next_check = datetime.now() + retry_delay if retry_delay else None
+                return 0, reasons, next_check
             else:
                 # owner_pct == 100 → non détecté, traiter comme risque modéré
                 self.logger.warning(f"Owner non détecté (100%) pour {token_data.get('symbol', '???')} - risque modéré")
@@ -363,25 +456,29 @@ class AdvancedFilter:
         sell_tax = token_data.get('sell_tax', None)
 
         if buy_tax is not None and buy_tax > self.max_buy_tax:
-            reasons.append(f"❌ REJET: Buy Tax {buy_tax:.1f}% > {self.max_buy_tax}% (trop élevé)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Buy Tax {buy_tax:.1f}% > {self.max_buy_tax}% (trop élevé)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Taxes élevées → jamais retry
 
         if sell_tax is not None and sell_tax > self.max_sell_tax:
-            reasons.append(f"❌ REJET: Sell Tax {sell_tax:.1f}% > {self.max_sell_tax}% (trop élevé)")
-            return 0, reasons
+            rejection_reason = f"❌ REJET: Sell Tax {sell_tax:.1f}% > {self.max_sell_tax}% (trop élevé)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Taxes élevées → jamais retry
 
         # 12. HONEYPOT CHECK (rejet automatique si honeypot)
         try:
             token_address = token_data['token_address']
             honeypot_check = self.web3_manager.check_honeypot(token_address)
             if honeypot_check.get('is_honeypot', True):
-                reasons.append(f"❌ REJET: Honeypot détecté")
-                return 0, reasons
+                rejection_reason = "❌ REJET: Honeypot détecté"
+                reasons.append(rejection_reason)
+                return 0, reasons, None  # Honeypot → jamais retry
         except Exception as e:
             self.logger.error(f"ÉCHEC CRITIQUE honeypot check pour {token_address}: {e}")
             # Sécurité maximale: rejet si impossible de vérifier
-            reasons.append(f"❌ REJET: Impossible de vérifier honeypot (erreur critique)")
-            return 0, reasons
+            rejection_reason = "❌ REJET: Impossible de vérifier honeypot (erreur critique)"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Erreur critique → jamais retry
 
         # === PHASE 1.5: VÉRIFICATIONS ON-CHAIN OBLIGATOIRES ===
         # Ces vérifications sont CRITIQUES pour atteindre 70%+ win-rate
@@ -393,8 +490,9 @@ class AdvancedFilter:
             try:
                 is_verified = self.basescan.is_contract_verified(addr)
                 if not is_verified:
-                    reasons.append(f"❌ REJET: Contrat non vérifié sur BaseScan")
-                    return 0, reasons
+                    rejection_reason = "❌ REJET: Contrat non vérifié sur BaseScan"
+                    reasons.append(rejection_reason)
+                    return 0, reasons, None  # Sécurité → jamais retry
             except Exception as e:
                 self.logger.warning(f"Impossible de vérifier contract verified pour {addr}: {e}")
                 # Si BaseScan API échoue, on continue (pas critique)
@@ -404,20 +502,23 @@ class AdvancedFilter:
             try:
                 is_locked = self.basescan.is_liquidity_locked(addr, min_hours=72)
                 if not is_locked:
-                    reasons.append(f"❌ REJET: Liquidité non lockée (minimum 72h requis)")
-                    return 0, reasons
+                    rejection_reason = "❌ REJET: Liquidité non lockée (minimum 72h requis)"
+                    reasons.append(rejection_reason)
+                    return 0, reasons, None  # Sécurité → jamais retry
             except Exception as e:
                 self.logger.warning(f"Impossible de vérifier liquidity lock pour {addr}: {e}")
                 # Lock non vérifiable → risque élevé → rejet par sécurité
-                reasons.append(f"❌ REJET: Impossible de vérifier liquidity lock (sécurité)")
-                return 0, reasons
+                rejection_reason = "❌ REJET: Impossible de vérifier liquidity lock (sécurité)"
+                reasons.append(rejection_reason)
+                return 0, reasons, None  # Sécurité → jamais retry
 
             # No mint function ?
             try:
                 has_mint = self.web3_manager.has_mint_function(addr)
                 if has_mint:
-                    reasons.append(f"❌ REJET: Fonction mint détectée (inflation possible)")
-                    return 0, reasons
+                    rejection_reason = "❌ REJET: Fonction mint détectée (inflation possible)"
+                    reasons.append(rejection_reason)
+                    return 0, reasons, None  # Sécurité → jamais retry
             except Exception as e:
                 self.logger.warning(f"Impossible de vérifier mint function pour {addr}: {e}")
                 # Si impossible de vérifier, on continue (fallback: honeypot check a déjà validé)
@@ -425,8 +526,9 @@ class AdvancedFilter:
 
         except Exception as e:
             self.logger.error(f"ÉCHEC CRITIQUE vérifications on-chain pour {token_address}: {e}")
-            reasons.append(f"❌ REJET: Échec vérification sécurité on-chain")
-            return 0, reasons
+            rejection_reason = "❌ REJET: Échec vérification sécurité on-chain"
+            reasons.append(rejection_reason)
+            return 0, reasons, None  # Sécurité → jamais retry
 
         # === PHASE 2: SCORING (Si le token a passé tous les rejets) ===
         score = 100.0  # Score parfait par défaut (tous critères passés)
@@ -451,7 +553,7 @@ class AdvancedFilter:
         reasons.append(f"Δ Prix 1h: {pc1h:+.1f}%")
         reasons.append(f"Holders: {holders}")
 
-        return score, reasons
+        return score, reasons, None  # Approuvé → pas de retry nécessaire
 
     def approve_token(self, token_data: Dict, score: float, reasons: List[str]):
         """Enregistre un token comme approuvé"""
@@ -482,8 +584,15 @@ class AdvancedFilter:
         self.stats['total_approved'] += 1
         self.logger.info(f"✅ Token APPROUVE: {token_data['symbol']} ({token_data['token_address']}) - Score: {score:.2f}")
 
-    def reject_token(self, token_data: Dict, reasons: List[str]):
-        """Enregistre un token comme rejeté"""
+    def reject_token(self, token_data: Dict, reasons: List[str], next_check_at: Optional[datetime] = None):
+        """
+        Enregistre un token comme rejeté
+
+        Args:
+            token_data: Données du token
+            reasons: Liste des raisons de rejet
+            next_check_at: Datetime du prochain retry (None = jamais retry)
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
@@ -492,52 +601,110 @@ class AdvancedFilter:
             'details': token_data
         })
 
+        # Formater next_check_at pour SQLite
+        next_check_str = next_check_at.strftime('%Y-%m-%d %H:%M:%S') if next_check_at else None
+
         cursor.execute('''
             INSERT OR REPLACE INTO rejected_tokens
-            (token_address, symbol, name, reason, analysis_data)
-            VALUES (?, ?, ?, ?, ?)
+            (token_address, symbol, name, reason, analysis_data, next_check_at)
+            VALUES (?, ?, ?, ?, ?, ?)
         ''', (
             token_data['token_address'],
             token_data['symbol'],
             token_data['name'],
             ', '.join(reasons),
-            analysis_json
+            analysis_json,
+            next_check_str
         ))
 
         conn.commit()
         conn.close()
         self.stats['total_rejected'] += 1
-        self.logger.info(f"❌ Token REJETE: {token_data['symbol']} ({token_data['token_address']}) - Raisons: {', '.join(reasons)}")
+
+        # Log avec info retry si applicable
+        retry_info = f" → Retry: {next_check_at.strftime('%H:%M')}" if next_check_at else " → Permanent"
+        self.logger.info(f"❌ Token REJETE: {token_data['symbol']} ({token_data['token_address']}){retry_info} - Raisons: {', '.join(reasons)}")
+
+    def clear_rejected_entry(self, token_address: str):
+        """
+        Supprime l'entrée rejected_tokens pour un token promu (retry réussi)
+
+        Args:
+            token_address: Adresse du token à supprimer de rejected_tokens
+        """
+        conn = sqlite3.connect(self.db_path)
+        cursor = conn.cursor()
+
+        cursor.execute('''
+            DELETE FROM rejected_tokens
+            WHERE token_address = ?
+        ''', (token_address,))
+
+        conn.commit()
+        conn.close()
+        self.logger.debug(f"Cleared rejected entry for {token_address}")
 
     def run_filter_cycle(self):
-        """Exécute un cycle de filtrage : récupère les tokens découverts, les analyse, les approuve/rejette"""
+        """
+        Exécute un cycle de filtrage: récupère les tokens découverts + retry candidates,
+        les analyse, les approuve/rejette
+        """
         conn = sqlite3.connect(self.db_path)
         cursor = conn.cursor()
 
         try:
-            # Récupérer les tokens découverts non encore filtrés (ni approuvés ni rejetés)
+            # === 1. NOUVEAUX TOKENS (jamais analysés) ===
+            # Exclure tokens déjà approuvés ET tokens rejetés SANS retry (next_check_at IS NULL)
             cursor.execute('''
                 SELECT * FROM discovered_tokens
                 WHERE token_address NOT IN (SELECT token_address FROM approved_tokens)
-                AND token_address NOT IN (SELECT token_address FROM rejected_tokens)
+                AND token_address NOT IN (
+                    SELECT token_address FROM rejected_tokens
+                    WHERE next_check_at IS NULL
+                )
             ''')
             new_tokens = cursor.fetchall()
 
-            if not new_tokens:
-                self.logger.info("Aucun nouveau token à filtrer pour le moment")
+            # === 2. RETRY CANDIDATES (si retry logic enabled) ===
+            retry_tokens = []
+            if self.retry_logic_enabled:
+                cursor.execute('''
+                    SELECT dt.*, rt.reason as previous_rejection
+                    FROM discovered_tokens dt
+                    INNER JOIN rejected_tokens rt ON dt.token_address = rt.token_address
+                    WHERE rt.next_check_at IS NOT NULL
+                    AND datetime(rt.next_check_at) <= datetime('now')
+                ''')
+                retry_tokens = cursor.fetchall()
+
+            # Vérifier s'il y a des tokens à analyser
+            total_tokens = len(new_tokens) + len(retry_tokens)
+            if total_tokens == 0:
+                self.logger.info("Aucun token à filtrer (nouveaux: 0, retry: 0)")
                 conn.close()
                 return
 
             # Récupérer les noms des colonnes pour reconstruire les dictionnaires
             col_names = [description[0] for description in cursor.description]
 
-            self.logger.info(f"{len(new_tokens)} nouveau(x) token(s) à analyser")
+            self.logger.info(
+                f"Tokens à analyser: {len(new_tokens)} nouveaux, "
+                f"{len(retry_tokens)} retry candidates"
+            )
 
-            for row in new_tokens:
+            # === 3. TRAITER TOUS LES TOKENS (nouveaux + retry) ===
+            all_tokens = list(new_tokens) + list(retry_tokens)
+
+            for row in all_tokens:
                 token_dict = dict(zip(col_names, row))
                 self.stats['total_analyzed'] += 1
 
-                self.logger.info(f"Analyse du token: {token_dict.get('symbol', 'N/A')} ({token_dict['token_address']})")
+                # Vérifier si c'est un retry
+                is_retry = row in retry_tokens
+                previous_rejection = token_dict.get('previous_rejection', 'N/A') if is_retry else None
+
+                status_prefix = "🔄 RETRY" if is_retry else "🆕 NEW"
+                self.logger.info(f"{status_prefix} - Analyse du token: {token_dict.get('symbol', 'N/A')} ({token_dict['token_address']})")
 
                 # === ENRICHISSEMENT DEXSCREENER ===
                 # Scanner fournit seulement données on-chain (age_hours, symbol, name, decimals)
@@ -566,22 +733,34 @@ class AdvancedFilter:
                     else:
                         self.logger.warning(f"⚠️ DexScreener: Aucune donnée pour {token_address[:8]}... (token trop récent?)")
                         # Rejeter si DexScreener ne trouve rien (token non listé ou trop récent)
-                        self.reject_token(token_dict, ["❌ REJET: Token non trouvé sur DexScreener (trop récent ou non listé)"])
+                        rejection_reason = "❌ REJET: Token non trouvé sur DexScreener (trop récent ou non listé)"
+                        self.reject_token(token_dict, [rejection_reason], None)
                         continue
 
                 except Exception as e:
                     self.logger.error(f"❌ Échec enrichissement DexScreener pour {token_address[:8]}...: {e}")
                     # Rejeter en cas d'échec enrichissement (sécurité)
-                    self.reject_token(token_dict, [f"❌ REJET: Échec enrichissement données market ({str(e)[:50]})"])
+                    rejection_reason = f"❌ REJET: Échec enrichissement données market ({str(e)[:50]})"
+                    self.reject_token(token_dict, [rejection_reason], None)
                     continue
 
                 # Calculer le score
-                score, reasons = self.calculate_score(token_dict)
+                score, reasons, next_check_at = self.calculate_score(token_dict)
 
                 if score >= self.score_threshold:
+                    # APPROUVÉ: supprimer de rejected_tokens si retry réussi
+                    if is_retry:
+                        self.clear_rejected_entry(token_address)
+                        # Log de promotion avec comparaison avant/après
+                        self.logger.info(
+                            f"🔄 RE-APPROUVÉ: {token_dict['symbol']} | "
+                            f"Précédent: {previous_rejection} | "
+                            f"Nouveau: liq=${token_dict.get('liquidity', 0):,.0f}, "
+                            f"vol1h=${token_dict.get('volume_1h', 0):,.0f}"
+                        )
                     self.approve_token(token_dict, score, reasons)
                 else:
-                    self.reject_token(token_dict, reasons)
+                    self.reject_token(token_dict, reasons, next_check_at)
 
         except Exception as e:
             self.logger.error(f"Erreur lors du cycle de filtrage: {e}")
