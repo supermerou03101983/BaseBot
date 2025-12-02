@@ -85,18 +85,36 @@ class RealTrader:
         (PROJECT_DIR / 'data').mkdir(parents=True, exist_ok=True)
         (PROJECT_DIR / 'logs').mkdir(parents=True, exist_ok=True)
         (PROJECT_DIR / 'config').mkdir(parents=True, exist_ok=True)
-        
+
         self.db_path = PROJECT_DIR / 'data' / 'trading.db'
         self.setup_logging()
         self.init_database()  # Initialiser les tables du Trader
 
+        # RPC protégés pour transactions (Protection MEV/Frontrun)
+        drpc_api_key = os.getenv('DRPC_API_KEY', '')
+        rpc_trader_url = os.getenv('RPC_TRADER_URL', 'https://base.drpc.org')
+
+        # Ajouter l'API key à l'URL dRPC si fournie
+        if drpc_api_key and 'drpc.org' in rpc_trader_url:
+            # Format: https://base.drpc.org/<API_KEY>
+            if not rpc_trader_url.endswith('/'):
+                rpc_trader_url += '/'
+            rpc_trader_url += drpc_api_key
+
+        # Liste des RPC avec fallback pour le trading (ordre de priorité)
+        self.rpc_trader_urls = [
+            rpc_trader_url,  # dRPC protégé (priorité 1)
+            os.getenv('RPC_TRADER_BACKUP', 'https://base.meowrpc.com')  # Fallback
+        ]
+        self.current_rpc_trader_index = 0
+
         # Web3 setup avec gestion d'erreur
         try:
-            self.web3_manager = BaseWeb3Manager(
-                rpc_url=os.getenv('RPC_URL', 'https://mainnet.base.org'),
-                private_key=os.getenv('PRIVATE_KEY')
-            )
-            
+            # Connecter au RPC protégé pour les transactions
+            self.web3_manager = self._connect_to_protected_rpc()
+            if not self.web3_manager:
+                raise Exception("Impossible de se connecter aux RPC protégés")
+
             self.uniswap = UniswapV3Manager(self.web3_manager)
             self.dexscreener = DexScreenerAPI()
             self.coingecko = CoinGeckoAPI(os.getenv('COINGECKO_API_KEY'))
@@ -159,7 +177,7 @@ class RealTrader:
         """Configuration du logging"""
         log_file = PROJECT_DIR / 'logs' / 'trader.log'
         log_file.parent.mkdir(parents=True, exist_ok=True)
-        
+
         logging.basicConfig(
             level=logging.INFO,
             format='%(asctime)s - %(levelname)s - %(message)s',
@@ -169,6 +187,145 @@ class RealTrader:
             ]
         )
         self.logger = logging.getLogger(__name__)
+
+    def _connect_to_protected_rpc(self) -> Optional[BaseWeb3Manager]:
+        """
+        Connecte au RPC protégé en essayant tous les RPC disponibles
+        Retourne un BaseWeb3Manager configuré avec le RPC qui fonctionne
+        """
+        for i, rpc_url in enumerate(self.rpc_trader_urls):
+            try:
+                # Masquer l'API key dans les logs
+                display_url = rpc_url.split('/')[-1] if len(rpc_url.split('/')) > 3 else rpc_url
+                if len(display_url) > 20:
+                    display_url = rpc_url.rsplit('/', 1)[0] + '/***'
+
+                self.logger.info(
+                    f"🔌 Tentative connexion RPC Trader {i+1}/{len(self.rpc_trader_urls)}: {display_url}"
+                )
+
+                # Créer le Web3Manager avec ce RPC
+                web3_manager = BaseWeb3Manager(
+                    rpc_url=rpc_url,
+                    private_key=os.getenv('PRIVATE_KEY')
+                )
+
+                # Vérifier que la connexion fonctionne
+                if web3_manager.w3.is_connected():
+                    block_number = web3_manager.w3.eth.block_number
+                    self.current_rpc_trader_index = i
+
+                    # Log spécial si dRPC protégé
+                    if 'drpc.org' in rpc_url:
+                        self.logger.info(
+                            f"✅ Connecté au RPC PROTÉGÉ dRPC (bloc: {block_number}) - "
+                            f"Protection MEV/Frontrun ACTIVE"
+                        )
+                    else:
+                        self.logger.info(f"✅ Connecté au RPC {i+1} (bloc: {block_number})")
+
+                    return web3_manager
+
+            except Exception as e:
+                self.logger.warning(
+                    f"❌ Échec connexion RPC {i+1}: {str(e)[:100]}"
+                )
+                continue
+
+        self.logger.error("❌ Impossible de se connecter à aucun RPC Trader")
+        return None
+
+    def _switch_to_next_rpc(self) -> bool:
+        """
+        Bascule vers le prochain RPC disponible en cas d'échec
+        Retourne True si la connexion réussit, False sinon
+        """
+        original_index = self.current_rpc_trader_index
+
+        for attempt in range(len(self.rpc_trader_urls)):
+            next_index = (self.current_rpc_trader_index + 1) % len(self.rpc_trader_urls)
+
+            if next_index == original_index:
+                break  # On a fait le tour
+
+            try:
+                rpc_url = self.rpc_trader_urls[next_index]
+                display_url = rpc_url.split('/')[-1] if len(rpc_url.split('/')) > 3 else rpc_url
+                if len(display_url) > 20:
+                    display_url = rpc_url.rsplit('/', 1)[0] + '/***'
+
+                self.logger.info(f"🔄 Basculement vers RPC Trader {next_index+1}: {display_url}")
+
+                # Créer nouveau Web3Manager
+                new_web3_manager = BaseWeb3Manager(
+                    rpc_url=rpc_url,
+                    private_key=os.getenv('PRIVATE_KEY')
+                )
+
+                if new_web3_manager.w3.is_connected():
+                    self.current_rpc_trader_index = next_index
+                    self.web3_manager = new_web3_manager
+
+                    # Réinitialiser l'Uniswap manager avec le nouveau Web3
+                    self.uniswap = UniswapV3Manager(self.web3_manager)
+
+                    # Réinitialiser le router contract
+                    self.router = self.web3_manager.w3.eth.contract(
+                        address=Web3.to_checksum_address(self.uniswap.router),
+                        abi=self.router_abi
+                    )
+
+                    if 'drpc.org' in rpc_url:
+                        self.logger.info("✅ Basculement réussi vers dRPC protégé")
+                    else:
+                        self.logger.info(f"✅ Basculement réussi vers RPC {next_index+1}")
+
+                    return True
+
+            except Exception as e:
+                self.logger.warning(f"❌ Échec basculement vers RPC {next_index+1}: {e}")
+                continue
+
+        self.logger.error("❌ Tous les RPC Trader sont indisponibles")
+        return False
+
+    def _execute_transaction_with_retry(self, tx_function, tx_name: str, max_retries: int = 2):
+        """
+        Execute une transaction avec retry automatique sur échec RPC
+        tx_function: fonction qui construit et envoie la transaction
+        tx_name: nom de la transaction pour les logs
+        max_retries: nombre de tentatives maximum
+        """
+        for attempt_num in range(max_retries):
+            try:
+                self.logger.info(f"📤 {tx_name} (tentative {attempt_num + 1}/{max_retries})")
+                result = tx_function()
+                return result
+            except Exception as e:
+                error_msg = str(e).lower()
+
+                # Erreurs RPC qui nécessitent un switch
+                rpc_errors = ['connection', 'timeout', 'rpc', 'network', 'unavailable']
+                is_rpc_error = any(err in error_msg for err in rpc_errors)
+
+                if is_rpc_error and attempt_num < max_retries - 1:
+                    self.logger.warning(
+                        f"⚠️ Erreur RPC détectée pour {tx_name}: {str(e)[:100]}"
+                    )
+                    self.logger.info(f"🔄 Tentative de basculement RPC...")
+
+                    if self._switch_to_next_rpc():
+                        self.logger.info(f"✅ RPC changé, nouvelle tentative de {tx_name}")
+                        continue
+                    else:
+                        self.logger.error(f"❌ Impossible de changer de RPC pour {tx_name}")
+                        raise
+                else:
+                    # Erreur non-RPC ou dernier essai
+                    self.logger.error(f"❌ Échec {tx_name}: {e}")
+                    raise
+
+        raise Exception(f"Échec de {tx_name} après {max_retries} tentatives")
 
     def init_database(self):
         """Initialise les tables nécessaires pour le Trader"""
