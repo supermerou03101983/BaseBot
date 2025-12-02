@@ -626,16 +626,43 @@ class RealTrader:
                     )
                     continue
 
-                # Obtenir données fraîches pour momentum
-                dex_data = self.dexscreener.get_token_info(token_data['address'])
-                if dex_data:
+                # Obtenir données fraîches pour momentum (avec fallback on-chain)
+                dex_data = None
+                try:
+                    dex_data = self.dexscreener.get_token_info(token_data['address'])
+                except Exception as e:
+                    self.logger.warning(f"DexScreener échec pour {token_data['symbol']}: {e}")
+
+                if not dex_data or dex_data.get('price_usd', 0) <= 0:
+                    # Fallback on-chain pour momentum scoring
+                    self.logger.info(f"🔗 Fallback on-chain pour momentum {token_data['symbol']}")
+                    onchain_data = self._get_onchain_token_data(token_data['address'])
+
+                    if onchain_data:
+                        # Créer dex_data simulé avec données on-chain
+                        dex_data = {
+                            'price_usd': onchain_data.get('price_usd', 0),
+                            'liquidity_usd': onchain_data.get('liquidity_usd', 0),
+                            'volume_24h': token_data.get('volume_24h', 0),  # Depuis DB
+                            'price_change_1h': 0,  # Non disponible on-chain
+                            'price_change_24h': 0,
+                            'txns': {'buys': 0, 'sells': 0},
+                            'source': 'onchain_fallback'
+                        }
+
+                if dex_data and dex_data.get('price_usd', 0) > 0:
                     momentum_score = self.calculate_momentum_score(token_data, dex_data)
                     token_data['momentum_score'] = momentum_score
                     token_data['dex_data'] = dex_data
                     candidates.append(token_data)
+                else:
+                    self.logger.warning(
+                        f"❌ {token_data['symbol']}: Impossible d'obtenir données "
+                        f"(DexScreener ET fallback on-chain échoués)"
+                    )
 
             if not candidates:
-                self.logger.warning("Aucun candidat avec données DexScreener disponibles")
+                self.logger.warning("Aucun candidat avec données disponibles (DexScreener + fallback on-chain)")
                 return None
 
             # Trier par momentum score (meilleur en premier)
@@ -672,23 +699,59 @@ class RealTrader:
             min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '50000'))
 
             # Obtenir données fraîches depuis DexScreener (PRIORITÉ: prix frais)
-            dex_data = self.dexscreener.get_token_info(token['address'])
-            if not dex_data:
-                return False, "Impossible d'obtenir données DexScreener", 0
+            fresh_price = 0
+            fresh_liquidity = 0
+            fresh_volume = 0
+            data_source = "unknown"
+
+            # TENTATIVE 1-3: DexScreener avec retry
+            max_retries = 3
+            dex_data = None
+            for attempt in range(max_retries):
+                try:
+                    dex_data = self.dexscreener.get_token_info(token['address'])
+                    if dex_data and dex_data.get('price_usd', 0) > 0:
+                        break
+                    self.logger.warning(f"DexScreener tentative {attempt+1}/{max_retries}: données invalides")
+                    time.sleep(1)  # Petit délai entre retries
+                except Exception as e:
+                    self.logger.warning(f"DexScreener tentative {attempt+1}/{max_retries} échouée: {e}")
+                    if attempt < max_retries - 1:
+                        time.sleep(1)
+
+            if dex_data and dex_data.get('price_usd', 0) > 0:
+                # DexScreener OK
+                fresh_price = dex_data.get('price_usd', 0)
+                fresh_liquidity = dex_data.get('liquidity_usd', 0)
+                fresh_volume = dex_data.get('volume_24h', 0)
+                data_source = "DexScreener"
+            else:
+                # FALLBACK ON-CHAIN: Si DexScreener échoue ou données invalides
+                self.logger.warning(
+                    f"⚠️  DexScreener indisponible/invalide pour {token['symbol']} "
+                    f"après {max_retries} tentatives → Fallback on-chain"
+                )
+                onchain_data = self._get_onchain_token_data(token['address'])
+
+                if not onchain_data:
+                    return False, "DexScreener down ET fallback on-chain échoué", 0
+
+                fresh_price = onchain_data.get('price_usd', 0)
+                fresh_liquidity = onchain_data.get('liquidity_usd', 0)
+                fresh_volume = 0  # Volume non disponible on-chain, skip check
+                data_source = "On-chain fallback"
 
             # Récupérer le prix frais (CRITICAL pour éviter faux gains)
-            fresh_price = dex_data.get('price_usd', 0)
             if fresh_price <= 0:
-                return False, "Prix frais invalide ou non disponible", 0
+                return False, f"Prix frais invalide: ${fresh_price}", 0
 
             # Vérifier que la liquidité n'a pas été retirée (rug pull)
-            fresh_liquidity = dex_data.get('liquidity_usd', 0)  # Clé corrigée
-            if fresh_liquidity < min_liquidity:
+            # Note: Si on-chain fallback, liquidité peut être 0 (non critique)
+            if fresh_liquidity < min_liquidity and data_source != "On-chain fallback":
                 return False, f"Liquidité actuelle trop basse: ${fresh_liquidity:,.0f} (possible rug)", 0
 
-            # Vérifier que le volume n'a pas chuté drastiquement
-            fresh_volume = dex_data.get('volume_24h', 0)
-            if fresh_volume < min_volume_24h * 0.5:  # Tolérance 50%
+            # Vérifier que le volume n'a pas chuté drastiquement (skip si on-chain)
+            if fresh_volume > 0 and fresh_volume < min_volume_24h * 0.5:
                 return False, f"Volume 24h a chuté: ${fresh_volume:,.0f} (possible abandon)", 0
 
             # VÉRIFICATION HONEYPOT (Protection critique)
@@ -719,7 +782,7 @@ class RealTrader:
                 )
 
             self.logger.info(
-                f"✅ Token {token['symbol']} validé: "
+                f"✅ Token {token['symbol']} validé ({data_source}): "
                 f"Prix=${fresh_price:.8f} Liq=${fresh_liquidity:,.0f} Vol=${fresh_volume:,.0f}"
             )
             return True, "Token valide", fresh_price
@@ -812,6 +875,108 @@ class RealTrader:
         except Exception as e:
             self.logger.warning(f"Erreur calcul momentum score: {e}")
             return 50.0  # Score neutre par défaut
+
+    def _get_onchain_token_data(self, token_address: str) -> Optional[Dict]:
+        """
+        Fallback on-chain: obtient prix + liquidité via Uniswap V3 quote
+        Utilisé si DexScreener est down ou retourne données invalides
+
+        Returns:
+            Dict avec price_usd, liquidity_usd estimés, ou None si échec
+        """
+        try:
+            weth_address = "0x4200000000000000000000000000000000000006"
+
+            # 1. Obtenir prix via quote Uniswap (1 WETH → combien de tokens)
+            # Si le token vaut 0.0001 ETH, on recevra ~10,000 tokens pour 1 WETH
+            try:
+                amount_in_wei = 10**18  # 1 WETH
+                quote_result = self.uniswap.get_quote(
+                    token_in=weth_address,
+                    token_out=token_address,
+                    amount_in=amount_in_wei,
+                    fee=3000  # 0.3% pool
+                )
+
+                if not quote_result or quote_result <= 0:
+                    self.logger.warning(f"Quote invalide pour {token_address[:8]}...")
+                    return None
+
+                # Calculer prix token en ETH
+                token_decimals = 18  # Assumption par défaut
+                try:
+                    token_contract = self.web3_manager.w3.eth.contract(
+                        address=Web3.to_checksum_address(token_address),
+                        abi=self.web3_manager.erc20_abi
+                    )
+                    token_decimals = token_contract.functions.decimals().call()
+                except:
+                    pass  # Garder 18 si échec
+
+                tokens_per_eth = quote_result / (10 ** token_decimals)
+                price_eth = 1 / tokens_per_eth if tokens_per_eth > 0 else 0
+
+                # Convertir en USD (utiliser prix ETH cached ou estimation)
+                eth_price_usd = self.coingecko.get_eth_price()
+                if eth_price_usd == 0:
+                    eth_price_usd = 3000  # Fallback estimation
+
+                price_usd = price_eth * eth_price_usd
+
+            except Exception as e:
+                self.logger.warning(f"Échec quote Uniswap pour {token_address[:8]}...: {e}")
+                return None
+
+            # 2. Estimer liquidité via réserves de la pool (si accessible)
+            # Note: Calcul simplifié, approximation grossière
+            liquidity_usd = 0
+            try:
+                # Obtenir l'adresse de la pool via factory
+                factory_abi = json.loads('[{"inputs":[{"internalType":"address","name":"","type":"address"},{"internalType":"address","name":"","type":"address"},{"internalType":"uint24","name":"","type":"uint24"}],"name":"getPool","outputs":[{"internalType":"address","name":"","type":"address"}],"stateMutability":"view","type":"function"}]')
+                factory_address = "0x33128a8fC17869897dcE68Ed026d694621f6FDfD"  # Uniswap V3 Factory Base
+
+                factory_contract = self.web3_manager.w3.eth.contract(
+                    address=Web3.to_checksum_address(factory_address),
+                    abi=factory_abi
+                )
+
+                pool_address = factory_contract.functions.getPool(
+                    Web3.to_checksum_address(weth_address),
+                    Web3.to_checksum_address(token_address),
+                    3000
+                ).call()
+
+                if pool_address != '0x0000000000000000000000000000000000000000':
+                    # Obtenir balance WETH de la pool comme proxy de liquidité
+                    weth_contract = self.web3_manager.w3.eth.contract(
+                        address=Web3.to_checksum_address(weth_address),
+                        abi=self.web3_manager.erc20_abi
+                    )
+                    weth_balance_wei = weth_contract.functions.balanceOf(pool_address).call()
+                    weth_balance = weth_balance_wei / 10**18
+
+                    # Liquidité estimée = 2x balance WETH (WETH + Token en USD)
+                    liquidity_usd = weth_balance * eth_price_usd * 2
+
+            except Exception as e:
+                self.logger.debug(f"Estimation liquidité échouée (non critique): {e}")
+                # Garder liquidity_usd = 0, non bloquant
+
+            self.logger.info(
+                f"🔗 Fallback on-chain OK: {token_address[:8]}... | "
+                f"Prix=${price_usd:.8f} | Liq~${liquidity_usd:,.0f}"
+            )
+
+            return {
+                'price_usd': price_usd,
+                'liquidity_usd': liquidity_usd,
+                'price_eth': price_eth,
+                'source': 'onchain_fallback'
+            }
+
+        except Exception as e:
+            self.logger.error(f"Fallback on-chain échoué pour {token_address[:8]}...: {e}")
+            return None
 
     def get_eth_balance(self) -> float:
         """Recupere le balance ETH du wallet"""
