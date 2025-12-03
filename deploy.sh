@@ -326,6 +326,7 @@ PRIVATE_KEY=0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef
 # ============================================
 # 📊 APIS EXTERNES
 # ============================================
+BIRDEYE_API_KEY=your_birdeye_api_key_here
 ETHERSCAN_API_KEY=YOUR_ETHERSCAN_API_KEY
 COINGECKO_API_KEY=
 

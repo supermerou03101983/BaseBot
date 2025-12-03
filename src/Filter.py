@@ -20,7 +20,7 @@ sys.path.append(str(PROJECT_DIR))
 from dotenv import load_dotenv
 from web3_utils import (
     BaseWeb3Manager, UniswapV3Manager,
-    DexScreenerAPI, BaseScanAPI, CoinGeckoAPI
+    MarketDataAggregator, BaseScanAPI, CoinGeckoAPI
 )
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
@@ -48,7 +48,9 @@ class AdvancedFilter:
             private_key=os.getenv('PRIVATE_KEY')
         )
         self.uniswap = UniswapV3Manager(self.web3_manager)
-        self.dexscreener = DexScreenerAPI()
+        # Market data aggregator (BirdEye + DexScreener + on-chain fallback)
+        birdeye_api_key = os.getenv('BIRDEYE_API_KEY')
+        self.market_data = MarketDataAggregator(birdeye_api_key=birdeye_api_key, web3_manager=self.web3_manager)
         self.basescan = BaseScanAPI(os.getenv('ETHERSCAN_API_KEY')) # Utilise la clé Etherscan
         self.coingecko = CoinGeckoAPI(os.getenv('COINGECKO_API_KEY'))
 
@@ -708,32 +710,32 @@ class AdvancedFilter:
 
                 # === ENRICHISSEMENT DEXSCREENER ===
                 # Scanner fournit seulement données on-chain (age_hours, symbol, name, decimals)
-                # Filter enrichit avec données market DexScreener pour scoring
+                # Filter enrichit avec données market (BirdEye + DexScreener + on-chain fallback)
                 try:
                     token_address = token_dict['token_address']
-                    dex_data = self.dexscreener.get_token_info(token_address)
+                    market_data = self.market_data.get_enriched_token_data(token_address)
 
-                    if dex_data:
-                        # Enrichir token_dict avec données DexScreener
-                        token_dict['liquidity'] = dex_data.get('liquidity', 0)
-                        token_dict['market_cap'] = dex_data.get('market_cap', 0)
-                        token_dict['volume_24h'] = dex_data.get('volume_24h', 0)
-                        token_dict['volume_1h'] = dex_data.get('volume_1h', 0)
-                        token_dict['volume_5min'] = dex_data.get('volume_5min', 0)
-                        token_dict['price_change_5m'] = dex_data.get('price_change_5m', 0)
-                        token_dict['price_change_1h'] = dex_data.get('price_change_1h', 0)
-                        token_dict['price_usd'] = dex_data.get('price_usd', 0)
-                        token_dict['holder_count'] = dex_data.get('holder_count', 0)
-                        token_dict['owner_percentage'] = dex_data.get('owner_percentage', 100.0)
-                        token_dict['buy_tax'] = dex_data.get('buy_tax')
-                        token_dict['sell_tax'] = dex_data.get('sell_tax')
-                        token_dict['pair_created_at'] = dex_data.get('pair_created_at')
+                    if market_data:
+                        # Enrichir token_dict avec données agrégées
+                        token_dict['liquidity'] = market_data.get('liquidity', 0)
+                        token_dict['market_cap'] = market_data.get('market_cap', 0)
+                        token_dict['volume_24h'] = market_data.get('volume_24h', 0)
+                        token_dict['volume_1h'] = market_data.get('volume_1h', 0)
+                        token_dict['volume_5min'] = market_data.get('volume_5min', 0)
+                        token_dict['price_change_5m'] = market_data.get('price_change_5m', 0)
+                        token_dict['price_change_1h'] = market_data.get('price_change_1h', 0)
+                        token_dict['price_usd'] = market_data.get('price_usd', 0)
+                        token_dict['holder_count'] = market_data.get('holder_count', 0)
+                        token_dict['owner_percentage'] = market_data.get('owner_percentage', 100.0)
+                        token_dict['buy_tax'] = market_data.get('buy_tax')
+                        token_dict['sell_tax'] = market_data.get('sell_tax')
+                        token_dict['data_source'] = market_data.get('source', 'unknown')
 
-                        self.logger.debug(f"✅ Enrichissement DexScreener réussi pour {token_dict['symbol']}")
+                        self.logger.debug(f"✅ Enrichissement réussi pour {token_dict['symbol']} (source: {token_dict['data_source']})")
                     else:
-                        self.logger.warning(f"⚠️ DexScreener: Aucune donnée pour {token_address[:8]}... (token trop récent?)")
-                        # Rejeter si DexScreener ne trouve rien (token non listé ou trop récent)
-                        rejection_reason = "❌ REJET: Token non trouvé sur DexScreener (trop récent ou non listé)"
+                        self.logger.warning(f"⚠️ Aucune donnée market pour {token_address[:8]}... (BirdEye+DexScreener+onchain ont échoué)")
+                        # Rejeter si aucune source n'a retourné de données
+                        rejection_reason = "❌ REJET: Token non trouvé sur BirdEye/DexScreener/on-chain (trop récent ou non listé)"
                         self.reject_token(token_dict, [rejection_reason], None)
                         continue
 

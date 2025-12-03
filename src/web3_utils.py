@@ -466,9 +466,77 @@ class DexScreenerAPI:
             print(f"Erreur parsing pair data: {e}")
             return {}
 
+class BirdEyeAPI:
+    """Client pour l'API BirdEye - Source principale pour données marché"""
+
+    def __init__(self, api_key: str = None):
+        self.api_key = api_key or "demo"  # Clé demo pour tests
+        self.base_url = "https://public-api.birdeye.so"
+        self.chain = "base"  # Base chain
+        self.session = self._create_session()
+
+    def _create_session(self) -> requests.Session:
+        """Crée une session avec retry automatique"""
+        session = requests.Session()
+        session.headers.update({
+            'X-API-KEY': self.api_key,
+            'x-chain': self.chain
+        })
+        retry = Retry(
+            total=3,
+            backoff_factor=1,
+            status_forcelist=[429, 500, 502, 503, 504]
+        )
+        adapter = HTTPAdapter(max_retries=retry)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
+        return session
+
+    def close(self) -> None:
+        """Ferme la session HTTP"""
+        if self.session:
+            self.session.close()
+
+    def get_token_overview(self, token_address: str) -> Optional[Dict]:
+        """
+        Récupère les données de marché d'un token via BirdEye
+
+        Returns:
+            Dict avec: price_usd, volume_5min, volume_1h, price_change_5m,
+                      price_change_1h, holder_count
+        """
+        try:
+            url = f"{self.base_url}/defi/v3/token/overview"
+            params = {'address': token_address}
+
+            response = self.session.get(url, params=params, timeout=10)
+
+            if response.status_code == 200:
+                data = response.json()
+
+                if data.get('success') and data.get('data'):
+                    token_data = data['data']
+
+                    return {
+                        'price_usd': float(token_data.get('price', 0)),
+                        'volume_5min': float(token_data.get('volume5m', 0)),
+                        'volume_1h': float(token_data.get('volume1h', 0)),
+                        'volume_24h': float(token_data.get('volume24h', 0)),
+                        'price_change_5m': float(token_data.get('priceChange5m', 0)),
+                        'price_change_1h': float(token_data.get('priceChange1h', 0)),
+                        'price_change_24h': float(token_data.get('priceChange24h', 0)),
+                        'market_cap': float(token_data.get('mc', 0)),
+                        'holder_count': int(token_data.get('holder', 0)),
+                        'source': 'birdeye'
+                    }
+            return None
+        except Exception as e:
+            print(f"Erreur BirdEye API: {e}")
+            return None
+
 class BaseScanAPI:
     """Client pour Etherscan v2 API (Base chain)"""
-    
+
     def __init__(self, api_key: str = None):
         self.api_key = api_key or "YourDefaultAPIKey"
         # NOUVELLE URL Etherscan v2 pour Base
@@ -819,3 +887,129 @@ class GeckoTerminalAPI:
         except Exception as e:
             print(f"Erreur formatage pool GeckoTerminal: {e}")
             return None
+
+
+class MarketDataAggregator:
+    """
+    Agrégateur de données de marché combinant plusieurs sources:
+    - BirdEye (principale): volume, prix, momentum, holders
+    - DexScreener (secondaire): liquidité, verification
+    - On-chain (fallback): prix via Uniswap V3 quote
+    """
+
+    def __init__(self, birdeye_api_key: str = None, web3_manager: BaseWeb3Manager = None):
+        self.birdeye = BirdEyeAPI(api_key=birdeye_api_key)
+        self.dexscreener = DexScreenerAPI()
+        self.web3_manager = web3_manager
+        self.uniswap_manager = UniswapV3Manager(web3_manager) if web3_manager else None
+
+    def close(self):
+        """Ferme toutes les sessions"""
+        if self.birdeye:
+            self.birdeye.close()
+        if self.dexscreener:
+            self.dexscreener.close()
+
+    def get_enriched_token_data(self, token_address: str) -> Optional[Dict]:
+        """
+        Récupère les données d'un token en combinant plusieurs sources
+
+        Priorité:
+        1. BirdEye → volume_5min, volume_1h, price_change_5m, price_change_1h, holder_count
+        2. DexScreener → liquidity (usd + locked), market_cap
+        3. On-chain fallback → prix via Uniswap V3 si APIs échouent
+
+        Returns:
+            Dict complet avec toutes les données nécessaires ou None
+        """
+        result = {
+            'token_address': token_address,
+            'price_usd': 0,
+            'volume_5min': 0,
+            'volume_1h': 0,
+            'volume_24h': 0,
+            'price_change_5m': 0,
+            'price_change_1h': 0,
+            'price_change_24h': 0,
+            'holder_count': 0,
+            'liquidity': 0,
+            'liquidity_locked_usd': 0,
+            'market_cap': 0,
+            'owner_percentage': 100.0,
+            'buy_tax': None,
+            'sell_tax': None,
+            'source': 'none'
+        }
+
+        # 1. BirdEye (source principale)
+        birdeye_data = self.birdeye.get_token_overview(token_address)
+        if birdeye_data:
+            result['price_usd'] = birdeye_data.get('price_usd', 0)
+            result['volume_5min'] = birdeye_data.get('volume_5min', 0)
+            result['volume_1h'] = birdeye_data.get('volume_1h', 0)
+            result['volume_24h'] = birdeye_data.get('volume_24h', 0)
+            result['price_change_5m'] = birdeye_data.get('price_change_5m', 0)
+            result['price_change_1h'] = birdeye_data.get('price_change_1h', 0)
+            result['price_change_24h'] = birdeye_data.get('price_change_24h', 0)
+            result['holder_count'] = birdeye_data.get('holder_count', 0)
+            result['market_cap'] = birdeye_data.get('market_cap', 0)
+            result['source'] = 'birdeye'
+
+        # 2. DexScreener (données complémentaires)
+        dex_data = self.dexscreener.get_token_info(token_address)
+        if dex_data:
+            # Utiliser liquidité de DexScreener (plus fiable)
+            result['liquidity'] = dex_data.get('liquidity', 0)
+
+            # Si BirdEye n'a pas donné de prix, utiliser DexScreener
+            if result['price_usd'] == 0:
+                result['price_usd'] = dex_data.get('price_usd', 0)
+                result['source'] = 'dexscreener' if result['source'] == 'none' else result['source']
+
+            # Market cap si manquant
+            if result['market_cap'] == 0:
+                result['market_cap'] = dex_data.get('market_cap', 0)
+
+            # Données DexScreener uniquement
+            result['owner_percentage'] = dex_data.get('owner_percentage', 100.0)
+            result['buy_tax'] = dex_data.get('buy_tax')
+            result['sell_tax'] = dex_data.get('sell_tax')
+
+        # 3. Fallback on-chain si toujours pas de prix
+        if result['price_usd'] == 0 and self.uniswap_manager:
+            onchain_price = self._get_onchain_price(token_address)
+            if onchain_price and onchain_price > 0:
+                result['price_usd'] = onchain_price
+                result['source'] = 'onchain'
+
+        # Validation: si aucune source n'a fourni de données
+        if result['price_usd'] == 0 and result['liquidity'] == 0:
+            return None
+
+        return result
+
+    def _get_onchain_price(self, token_address: str) -> float:
+        """Récupère le prix on-chain via Uniswap V3 quote"""
+        try:
+            if not self.uniswap_manager:
+                return 0
+
+            # Quote 1 token → WETH
+            weth_address = "0x4200000000000000000000000000000000000006"
+            weth_amount = self.uniswap_manager.get_quote(
+                token_in=token_address,
+                token_out=weth_address,
+                amount_in=10**18,  # 1 token (18 decimals)
+                fee=3000  # 0.3%
+            )
+
+            if weth_amount and weth_amount > 0:
+                # Prix approximatif WETH = $3000 (à ajuster selon marché)
+                eth_price_usd = 3000
+                price_usd = (weth_amount / 10**18) * eth_price_usd
+                return price_usd
+
+            return 0
+        except Exception as e:
+            print(f"Erreur prix on-chain: {e}")
+            return 0
