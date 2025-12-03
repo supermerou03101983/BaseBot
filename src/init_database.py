@@ -39,7 +39,7 @@ def init_database():
         VALUES (1, 0)
     ''')
     
-    # Table discovered_tokens (schéma aligné avec Scanner.py et Filter.py)
+    # Table discovered_tokens (schéma complet aligné avec Scanner.py et Filter.py)
     # ✅ SCHEMA UNIFIÉ avec pair_created_at (date blockchain) et discovered_at (date découverte)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS discovered_tokens (
@@ -49,12 +49,25 @@ def init_database():
             name TEXT,
             decimals INTEGER,
             total_supply TEXT,
+            pair_address TEXT,
+            base_token TEXT,
+            factory TEXT,
+            block_created INTEGER,
+            age_hours REAL,
             liquidity REAL DEFAULT 0,
             market_cap REAL DEFAULT 0,
             volume_24h REAL DEFAULT 0,
+            volume_1h REAL DEFAULT 0,
+            volume_5min REAL DEFAULT 0,
+            price_change_5m REAL DEFAULT 0,
+            price_change_1h REAL DEFAULT 0,
             price_usd REAL DEFAULT 0,
             price_eth REAL DEFAULT 0,
             pair_created_at TIMESTAMP,
+            holder_count INTEGER DEFAULT 0,
+            owner_percentage REAL DEFAULT 100.0,
+            buy_tax REAL,
+            sell_tax REAL,
             discovered_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -87,8 +100,18 @@ def init_database():
             next_check_at TIMESTAMP
         )
     ''')
+
+    # Table filter_rules (schéma aligné avec Filter.py)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS filter_rules (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            rule_name TEXT UNIQUE NOT NULL,
+            rule_config TEXT,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
     
-    # Table trade_history (schéma aligné avec trader.py)
+    # Table trade_history (schéma complet aligné avec Trader.py et Dashboard.py)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trade_history (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -98,10 +121,15 @@ def init_database():
             amount_in REAL,
             amount_out REAL,
             price REAL,
+            entry_price REAL,
+            current_price REAL,
             gas_used REAL,
             profit_loss REAL,
+            profit_loss_percent REAL,
             entry_time TIMESTAMP,
             exit_time TIMESTAMP,
+            reason TEXT,
+            duration_hours REAL,
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
@@ -198,7 +226,7 @@ def init_database():
     conn.close()
     
     print(f"✅ Base de données initialisée: {DB_PATH}")
-    print(f"📊 Tables créées: 8")
+    print(f"📊 Tables créées: 9")
     print(f"📈 Stratégie: Trailing 4 niveaux (12%, 30%, 100%, 300%)")
     print(f"⚙️ Configuration: 15% position, max 2 positions, 3 trades/jour")
 
