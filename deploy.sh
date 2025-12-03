@@ -310,12 +310,31 @@ if [ ! -f "$BOT_DIR/config/.env" ]; then
 # ============================================
 # 🌐 BLOCKCHAIN CONFIGURATION
 # ============================================
-# RPC Base Network (RPC stable recommandé)
+# RPC Base Network (RPC principal)
 RPC_URL=https://mainnet.base.org
+
+# RPC de backup (utilisés automatiquement si RPC principal échoue)
+RPC_BACKUP_1=https://base.publicnode.com
+RPC_BACKUP_2=https://base.meowrpc.com
+RPC_BACKUP_3=https://base.llamarpc.com
+
 BASE_CHAIN_ID=8453
 
 WETH_ADDRESS=0x4200000000000000000000000000000000000006
 USDC_ADDRESS=0x833589fCD6eDb6E08f4c7C32D4f71b54bdA02913
+
+# ============================================
+# 🔐 TRADER RPC - Protection MEV/Frontrun
+# ============================================
+# Protège le Trader contre les attaques MEV (frontrun/sandwich) en mode réel
+# dRPC offre RPC privé avec protection anti-MEV intégrée
+# ⚠️ Inscrivez-vous sur https://drpc.org pour obtenir votre API Key
+
+# API Key dRPC (service RPC protégé anti-MEV)
+DRPC_API_KEY=YOUR_DRPC_API_KEY_HERE
+
+# RPC principal pour le Trader (protégé contre MEV)
+RPC_TRADER_URL=https://base.drpc.org
 
 # ============================================
 # 🔑 WALLET (CONFIDENTIEL - À REMPLIR)
@@ -426,6 +445,15 @@ TIME_EXIT_LOW_MOMENTUM_HOURS=48
 TIME_EXIT_LOW_MOMENTUM_MIN_PROFIT=20
 TIME_EXIT_MAXIMUM_HOURS=72
 TIME_EXIT_EMERGENCY_HOURS=120
+
+# ============================================
+# 🔄 RETRY LOGIC - Système de Retry Progressif (Modification #6)
+# ============================================
+# Activer le système de retry progressif (true/false)
+# Si true: tokens rejetés pour liquidité/volume/momentum seront ré-analysés
+# Si false: tous les rejets sont définitifs (comportement original)
+# Délais de retry: liquidité/volume = 30min, momentum = 12min, distribution = 120min
+ENABLE_RETRY_LOGIC=true
 
 # ============================================
 # 🌐 API SERVER
