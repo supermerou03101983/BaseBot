@@ -374,48 +374,61 @@ GRACE_PERIOD_MINUTES=3
 GRACE_PERIOD_STOP_LOSS=35
 
 # ============================================
-# 🔍 SCANNER ON-CHAIN (Modification #5)
+# 🔍 SCANNER ON-CHAIN (Momentum Safe v2)
 # ============================================
 # Scanner unifié qui détecte les nouveaux tokens via événements PairCreated
-# on-chain (Aerodrome + BaseSwap) et enrichit avec données DexScreener
-# Remplace l'approche GeckoTerminal/DexScreener par scan blockchain direct
+# on-chain (Uniswap V3 + Aerodrome + BaseSwap) et enrichit avec données BirdEye/DexScreener
+# Fenêtre optimisée 3.5-8h pour capturer momentum avant pic retail
 
 SCAN_INTERVAL_SECONDS=30
 
-# Filtrage par âge - Scanner détecte tokens 2h-12h après création
-MIN_TOKEN_AGE_HOURS=2
-MAX_TOKEN_AGE_HOURS=12
+# Filtrage par âge - Scanner détecte tokens 3.5h-8h après création
+MIN_TOKEN_AGE_HOURS=3.5
+MAX_TOKEN_AGE_HOURS=8.0
 
 UNISWAP_V3_FACTORY=0x33128a8fC17869897dcE68Ed026d694621f6FDfD
 AERODROME_FACTORY=0x420DD381b31aEf6683db6B902084cB0FFECe40Da
+BASESWAP_FACTORY=0x8909Dc15e40173Ff4699343b6eB8132c65e18eC6
 
 # ============================================
-# 🎯 FILTER CONFIGURATION
+# 🎯 FILTER CONFIGURATION (Momentum Safe v2)
 # ============================================
-# ⚠️ IMPORTANT: Ces valeurs sont optimisées pour trouver des tokens
-#               2h+ après leur création (évite les scams précoces)
-#               et profiter du pump avec un win rate ~75%
-# Ne modifiez ces valeurs que si vous comprenez la stratégie!
+# ⚠️ STRATÉGIE: Tokens 3.5-8h avec momentum confirmé, distribution saine
+#               Win-rate cible: >70% | Trades/jour: 2-5 | Qualité > Quantité
+# Ne modifiez ces valeurs que si vous comprenez parfaitement la stratégie!
 
 FILTER_INTERVAL_SECONDS=60
 
-# Critères principaux (stratégie optimisée - Modification #1)
-# ⚠️ IMPORTANT: Ces valeurs ont été assouplies après tests
-#               pour permettre le trading sur tokens 2-12h d'âge
-MIN_AGE_HOURS=2
-MIN_LIQUIDITY_USD=5000    # Assoupliss de $30K à $5K (Mod #1)
-MIN_VOLUME_24H=3000       # Assoupliss de $30K à $3K (Mod #1)
-MIN_HOLDERS=50            # Assoupliss de 150 à 50 (Mod #1)
-MIN_MARKET_CAP=5000       # Assoupliss de $25K à $5K (Mod #1)
-MAX_MARKET_CAP=10000000
-MAX_LIQUIDITY_USD=10000000
-MAX_BUY_TAX=5
-MAX_SELL_TAX=5
+# Fenêtre d'âge stricte (sweet spot momentum)
+MIN_AGE_HOURS=3.5
+MAX_AGE_HOURS=8.0
+
+# Liquidité saine (évite honeypots et baleines)
+MIN_LIQUIDITY_USD=12000
+MAX_LIQUIDITY_USD=2000000
+
+# Market cap viable (tokens sérieux avec potentiel)
+MIN_MARKET_CAP=80000
+MAX_MARKET_CAP=2500000
+
+# Volume momentum multi-timeframe
+MIN_VOLUME_24H=3000       # Conservé pour compatibilité Dashboard
+MIN_VOLUME_1H_USD=4000    # Volume 1h minimum
+MIN_VOLUME_5MIN_USD=800   # Volume 5min minimum
+MIN_VOLUME_RATIO_5M_1H=0.3  # Ratio 5m/1h (momentum acceleration)
+
+# Distribution saine (anti rug-pull)
+MIN_HOLDERS=120
+MAX_OWNER_PERCENTAGE=5.0
+
+# Taxes raisonnables
+MAX_BUY_TAX=3
+MAX_SELL_TAX=3
 MAX_SLIPPAGE=3
 
-# Scores de sécurité et potentiel
-MIN_SAFETY_SCORE=50       # Assoupliss de 70 à 50 (Mod #1)
-MIN_POTENTIAL_SCORE=40    # Assoupliss de 60 à 40 (Mod #1)
+# Scores de qualité renforcés
+MIN_SAFETY_SCORE=55
+MIN_POTENTIAL_SCORE=50
 
 # ============================================
 # 📈 TRAILING STOP CONFIGURATION
@@ -445,6 +458,12 @@ TIME_EXIT_LOW_MOMENTUM_HOURS=48
 TIME_EXIT_LOW_MOMENTUM_MIN_PROFIT=20
 TIME_EXIT_MAXIMUM_HOURS=72
 TIME_EXIT_EMERGENCY_HOURS=120
+
+# ============================================
+# 🔒 DISCIPLINE - Protection contre Revenge Trading
+# ============================================
+# Cooldown automatique après losing trade pour éviter décisions émotionnelles
+LOSING_TOKEN_COOLDOWN_HOURS=24
 
 # ============================================
 # 🔄 RETRY LOGIC - Système de Retry Progressif (Modification #6)

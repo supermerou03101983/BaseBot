@@ -158,7 +158,19 @@ def init_database():
             timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
         )
     ''')
-    
+
+    # Table losing_tokens_cooldown (Momentum Safe v2 - Discipline)
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS losing_tokens_cooldown (
+            token_address TEXT PRIMARY KEY,
+            symbol TEXT,
+            loss_amount REAL,
+            loss_percent REAL,
+            cooldown_until TIMESTAMP NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+    ''')
+
     # Table trading_config
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS trading_config (
@@ -221,14 +233,16 @@ def init_database():
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_history_time ON trade_history(timestamp DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trade_log_time ON trade_log(timestamp DESC)')
     cursor.execute('CREATE INDEX IF NOT EXISTS idx_trailing_token ON trailing_level_stats(token_address)')
+    cursor.execute('CREATE INDEX IF NOT EXISTS idx_losing_cooldown_until ON losing_tokens_cooldown(cooldown_until)')
     
     conn.commit()
     conn.close()
     
     print(f"✅ Base de données initialisée: {DB_PATH}")
-    print(f"📊 Tables créées: 9")
-    print(f"📈 Stratégie: Trailing 4 niveaux (12%, 30%, 100%, 300%)")
+    print(f"📊 Tables créées: 10")
+    print(f"📈 Stratégie: Momentum Safe v2 (fenêtre 3.5-8h)")
     print(f"⚙️ Configuration: 15% position, max 2 positions, 3 trades/jour")
+    print(f"🔒 Discipline: Losing token cooldown 24h actif")
 
 if __name__ == "__main__":
     init_database()

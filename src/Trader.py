@@ -134,8 +134,9 @@ class RealTrader:
         self.rejected_tokens_cooldown = {}  # {token_address: timestamp}
         self.cooldown_minutes = int(os.getenv('REJECTED_TOKEN_COOLDOWN_MINUTES', 30))
 
-        # Cooldown tokens perdants (Modification #3 - éviter re-trade immédiat)
-        self.losing_tokens_cooldown = {}  # {token_address: timestamp}
+        # Cooldown tokens perdants (Momentum Safe v2 - Discipline anti-revenge trading)
+        self.losing_token_cooldown_hours = int(os.getenv('LOSING_TOKEN_COOLDOWN_HOURS', '24'))
+        self.load_losing_cooldowns()
         
         # Router ABI pour Uniswap V3
         self.router_abi = json.loads('''[
@@ -521,6 +522,110 @@ class RealTrader:
                 
         if loaded_count > 0:
             self.logger.info(f"✅ {loaded_count} positions recuperees")
+
+    def load_losing_cooldowns(self):
+        """Charge les losing cooldowns depuis la DB au démarrage"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            # Récupérer les cooldowns actifs (non expirés)
+            cursor.execute('''
+                SELECT token_address, symbol, cooldown_until
+                FROM losing_tokens_cooldown
+                WHERE cooldown_until > datetime('now')
+            ''')
+
+            active_cooldowns = cursor.fetchall()
+            conn.close()
+
+            for token_address, symbol, cooldown_until_str in active_cooldowns:
+                cooldown_until = datetime.fromisoformat(cooldown_until_str)
+                self.logger.info(f"🔒 Losing cooldown chargé: {symbol} jusqu'à {cooldown_until.strftime('%Y-%m-%d %H:%M')}")
+
+            if active_cooldowns:
+                self.logger.info(f"✅ {len(active_cooldowns)} losing cooldowns actifs chargés")
+
+        except Exception as e:
+            self.logger.error(f"Erreur chargement losing cooldowns: {e}")
+
+    def add_to_losing_cooldown(self, token_address: str, symbol: str, loss_amount: float, loss_percent: float):
+        """Ajoute un token au cooldown après losing trade (Momentum Safe v2 - Discipline)"""
+        cooldown_until = datetime.now() + timedelta(hours=self.losing_token_cooldown_hours)
+
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                INSERT OR REPLACE INTO losing_tokens_cooldown
+                (token_address, symbol, loss_amount, loss_percent, cooldown_until)
+                VALUES (?, ?, ?, ?, ?)
+            ''', (token_address, symbol, loss_amount, loss_percent, cooldown_until))
+
+            conn.commit()
+            conn.close()
+
+            self.logger.warning(
+                f"🚫 {symbol} ajouté au losing cooldown ({self.losing_token_cooldown_hours}h) - "
+                f"Perte: ${loss_amount:.2f} ({loss_percent:.1f}%) - "
+                f"Jusqu'à: {cooldown_until.strftime('%Y-%m-%d %H:%M')}"
+            )
+
+        except Exception as e:
+            self.logger.error(f"Erreur ajout losing cooldown: {e}")
+
+    def is_in_losing_cooldown(self, token_address: str) -> bool:
+        """Vérifie si un token est en losing cooldown"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                SELECT symbol, cooldown_until
+                FROM losing_tokens_cooldown
+                WHERE token_address = ? AND cooldown_until > datetime('now')
+            ''', (token_address,))
+
+            result = cursor.fetchone()
+            conn.close()
+
+            if result:
+                symbol, cooldown_until_str = result
+                cooldown_until = datetime.fromisoformat(cooldown_until_str)
+                remaining_hours = (cooldown_until - datetime.now()).total_seconds() / 3600
+                self.logger.info(
+                    f"⏸️  {symbol} en losing cooldown - "
+                    f"Temps restant: {remaining_hours:.1f}h"
+                )
+                return True
+
+            return False
+
+        except Exception as e:
+            self.logger.error(f"Erreur vérification losing cooldown: {e}")
+            return False
+
+    def cleanup_expired_losing_cooldowns(self):
+        """Nettoie les losing cooldowns expirés (appelé périodiquement)"""
+        try:
+            conn = sqlite3.connect(self.db_path)
+            cursor = conn.cursor()
+
+            cursor.execute('''
+                DELETE FROM losing_tokens_cooldown
+                WHERE cooldown_until <= datetime('now')
+            ''')
+
+            deleted_count = cursor.rowcount
+            conn.commit()
+            conn.close()
+
+            if deleted_count > 0:
+                self.logger.info(f"🧹 {deleted_count} losing cooldowns expirés nettoyés")
+
+        except Exception as e:
+            self.logger.error(f"Erreur nettoyage losing cooldowns: {e}")
 
     def is_token_in_cooldown(self, token_address: str) -> bool:
         """Vérifie si un token est en cooldown (rejeté récemment)"""
@@ -1119,22 +1224,12 @@ class RealTrader:
             self.logger.error(f"Prix invalide pour {token['symbol']}: {token.get('price_usd')}")
             return False
 
-        # Cooldown tokens perdants (Modification #3)
-        # Ne pas re-trader un token perdu dans les 24h
+        # Cooldown tokens perdants (Momentum Safe v2 - Discipline)
+        # Ne pas re-trader un token perdu récemment
         token_address = token.get('address', '').lower()
-        if token_address in self.losing_tokens_cooldown:
-            cooldown_end = self.losing_tokens_cooldown[token_address]
-            hours_since = (time.time() - cooldown_end) / 3600
-            if hours_since < 24:
-                self.logger.info(
-                    f"❌ {token['symbol']} en cooldown perdant "
-                    f"(perdu il y a {hours_since:.1f}h, reste {24-hours_since:.1f}h)"
-                )
-                return False
-            else:
-                # Cooldown expiré, supprimer
-                del self.losing_tokens_cooldown[token_address]
-                self.logger.info(f"✅ Cooldown expiré pour {token['symbol']} ({hours_since:.1f}h)")
+        if self.is_in_losing_cooldown(token_address):
+            self.logger.info(f"❌ {token['symbol']} en losing cooldown - Skip")
+            return False
 
         # RE-VALIDATION avant achat (protection contre tokens obsolètes/rug)
         is_valid, reason, fresh_price = self.validate_token_before_buy(token)
@@ -1351,13 +1446,14 @@ class RealTrader:
                     f"Raison: {reason}"
                 )
 
-                # Cooldown tokens perdants (Modification #3)
+                # Cooldown tokens perdants (Momentum Safe v2 - Discipline)
                 if profit_percent < 0:
-                    token_address = position.token_address.lower()
-                    self.losing_tokens_cooldown[token_address] = time.time()
-                    self.logger.info(
-                        f"🔒 {position.symbol} ajouté au cooldown perdant (24h) "
-                        f"après perte de {profit_percent:.2f}%"
+                    loss_amount = abs(profit_loss)
+                    self.add_to_losing_cooldown(
+                        position.token_address.lower(),
+                        position.symbol,
+                        loss_amount,
+                        abs(profit_percent)
                     )
 
                 self.save_sell_to_db(position, profit_percent, reason, 'paper')
@@ -1510,13 +1606,14 @@ class RealTrader:
                         f"TX: {swap_hash.hex()}"
                     )
 
-                    # Cooldown tokens perdants (Modification #3)
+                    # Cooldown tokens perdants (Momentum Safe v2 - Discipline)
                     if profit_percent < 0:
-                        token_address = position.token_address.lower()
-                        self.losing_tokens_cooldown[token_address] = time.time()
-                        self.logger.info(
-                            f"🔒 {position.symbol} ajouté au cooldown perdant (24h) "
-                            f"après perte de {profit_percent:.2f}%"
+                        loss_amount = abs(profit_loss)
+                        self.add_to_losing_cooldown(
+                            position.token_address.lower(),
+                            position.symbol,
+                            loss_amount,
+                            abs(profit_percent)
                         )
 
                     self.save_sell_to_db(position, profit_percent, reason, 'real', swap_hash.hex())
