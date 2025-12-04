@@ -184,8 +184,9 @@ class AdvancedFilter:
             self.max_market_cap = float(os.getenv('MAX_MARKET_CAP', '2500000'))
 
             # Volume momentum (1h et 5min)
-            self.min_volume_1h = float(os.getenv('MIN_VOLUME_1H', '4000'))
-            self.min_volume_5min = float(os.getenv('MIN_VOLUME_5MIN', '800'))
+            # Support MIN_VOLUME_1H_USD (nouveau) avec fallback sur MIN_VOLUME_1H (ancien)
+            self.min_volume_1h = float(os.getenv('MIN_VOLUME_1H_USD', os.getenv('MIN_VOLUME_1H', '4000')))
+            self.min_volume_5min = float(os.getenv('MIN_VOLUME_5MIN_USD', os.getenv('MIN_VOLUME_5MIN', '800')))
             self.min_volume_ratio_5m_1h = float(os.getenv('MIN_VOLUME_RATIO_5M_1H', '0.3'))
             self.min_volume_24h = float(os.getenv('MIN_VOLUME_24H', '0'))  # Optionnel pour Momentum Safe
 
