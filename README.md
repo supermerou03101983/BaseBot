@@ -4,17 +4,59 @@ Bot de trading automatisé optimisé pour Base Chain avec scanner on-chain, filt
 
 ## 🚀 Installation Rapide
 
+### Installation VPS Vierge (Un Seul Commande)
+
+```bash
+curl -s https://raw.githubusercontent.com/supermerou03101983/BaseBot/main/deploy.sh | bash
+```
+
+**Le bot sera opérationnel en ~5 minutes.**
+
+### Installation Manuelle
+
 ```bash
 # 1. Cloner le repo
 git clone https://github.com/supermerou03101983/BaseBot.git
 cd BaseBot
 
-# 2. Déployer sur VPS
-chmod +x scripts/deploy.sh
-./scripts/deploy.sh
+# 2. Déployer
+chmod +x deploy.sh
+./deploy.sh
 ```
 
-**Le bot sera opérationnel en ~5 minutes.**
+---
+
+## ⚙️ Configurations Disponibles
+
+Le bot propose **2 configurations** :
+
+### 1️⃣ **Momentum Safe v2** (PRODUCTION) - `.env.example`
+- 🎯 Win-rate cible : **≥70%**
+- 📊 Trades/jour : **2-5**
+- ✅ Fenêtre : **3.5-8h** (sweet spot momentum)
+- ✅ Critères stricts : Liquidité $12K+, MC $80K+, 120+ holders
+- 💰 Usage : **Production avec capital réel**
+
+### 2️⃣ **Test Permissif** (VALIDATION) - `.env.test.permissif`
+- 🎯 Win-rate attendu : **10-30%** (normal)
+- 📊 Trades/jour : **10-20**
+- ⚠️ Fenêtre : **0-72h** (tous nouveaux tokens)
+- ⚠️ Critères permissifs : Liquidité $500+, MC $1K+, 10+ holders
+- 🧪 Usage : **Tests et validation workflow UNIQUEMENT**
+
+### 🔄 Basculer Entre Configurations
+
+```bash
+# Script interactif
+./switch_config.sh
+
+# Ou manuellement
+cp config/.env.example config/.env              # Production
+cp config/.env.test.permissif config/.env       # Tests
+```
+
+📚 **Documentation complète** : [config/README_CONFIGS.md](config/README_CONFIGS.md)
+🚀 **Guide test rapide** : [QUICK_START_TEST.md](QUICK_START_TEST.md)
 
 ---
 
@@ -22,30 +64,41 @@ chmod +x scripts/deploy.sh
 
 ### 🔍 Scanner On-Chain (Modification #5)
 - Scan direct des événements `PairCreated` sur blockchain
-- Support Aerodrome + BaseSwap factories
-- Filtrage tokens 2h-12h via calcul de blocs
-- Indépendant des APIs externes (DexScreener/GeckoTerminal)
+- Support Uniswap V3 + Aerodrome + BaseSwap
+- Filtrage par âge (3.5-8h en prod, 0-72h en test)
+- RPC fallback automatique (4 RPC configurés)
+- Indépendant des APIs externes pour la détection
 
-### 🎯 Filtre Multi-Critères
-- Volume 24h + 1h
-- Liquidité minimale
-- Nombre de holders
-- Détection honeypots
-- Momentum 5min
-- Cooldown tokens perdants
+### 🎯 Filtre Multi-Critères (Momentum Safe v2)
+- **12 critères stricts** en production :
+  - Fenêtre d'âge : 3.5-8h
+  - Liquidité : $12K-$2M
+  - Market Cap : $80K-$2.5M
+  - Volume 1h/5min + ratio accélération
+  - Momentum prix 5min/1h
+  - Distribution : 120+ holders, owner ≤5%
+  - Taxes : ≤3%
+  - Honeypot detection
+  - Contract verified
+  - Liquidity locked
+- **Enrichissement** : BirdEye (prioritaire) + DexScreener + on-chain fallback
+- **Retry logic** : Réanalyse progressive des tokens rejetés
 
 ### 💰 Trader Intelligent
-- Grace period (5min, -25% SL)
-- Stop-loss adaptatif
-- Take-profit progressif
-- Paper trading / Real trading
-- Gestion positions JSON
+- **Grace period** configurable (3min, -35% SL par défaut)
+- **Stop-loss** dynamique (-5% après grace period)
+- **Trailing stop** multi-niveaux (L1-L4)
+- **Time exits** : Stagnation, low momentum, maximum duration
+- **Losing token cooldown** : 24h anti-revenge trading
+- **Paper trading** / Real trading avec protection MEV (dRPC)
+- Gestion positions en JSON + DB
 
-### 📊 Dashboard Temps Réel
-- Stats performance
-- Positions actives
-- Historique trades
-- Métriques détaillées
+### 📊 Dashboard Temps Réel (Streamlit)
+- Stats performance (win-rate brut/net, profit moyen)
+- Positions actives avec détails
+- Historique trades avec calcul frais
+- Affichage complet de la stratégie active
+- Métriques losing cooldown et retry logic
 
 ---
 
