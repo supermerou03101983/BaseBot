@@ -563,8 +563,8 @@ with tab5:
 
         # Volume & Momentum
         st.subheader("📈 Volume & Momentum")
-        vol_1h = config_data.get('MIN_VOLUME_1H', 'N/A')
-        vol_5m = config_data.get('MIN_VOLUME_5MIN', 'N/A')
+        vol_1h = config_data.get('MIN_VOLUME_1H_USD', config_data.get('MIN_VOLUME_1H', 'N/A'))
+        vol_5m = config_data.get('MIN_VOLUME_5MIN_USD', config_data.get('MIN_VOLUME_5MIN', 'N/A'))
         ratio = config_data.get('MIN_VOLUME_RATIO_5M_1H', 'N/A')
         st.text(f"Volume 1h: ${vol_1h}")
         st.text(f"Volume 5min: ${vol_5m}")
@@ -588,6 +588,20 @@ with tab5:
         sell_tax = config_data.get('MAX_SELL_TAX', 'N/A')
         st.text(f"Buy Tax: ≤{buy_tax}%")
         st.text(f"Sell Tax: ≤{sell_tax}%")
+
+        st.markdown("---")
+
+        # Discipline & Retry Logic
+        st.subheader("🔒 Discipline & Retry")
+        losing_cooldown = config_data.get('LOSING_TOKEN_COOLDOWN_HOURS', 'N/A')
+        st.text(f"Losing Token Cooldown: {losing_cooldown}h")
+        st.caption("Évite revenge trading après perte")
+
+        retry_enabled = config_data.get('ENABLE_RETRY_LOGIC', 'false').lower() == 'true'
+        retry_status = "✅ Activé" if retry_enabled else "❌ Désactivé"
+        st.text(f"Retry Logic: {retry_status}")
+        if retry_enabled:
+            st.caption("Tokens rejetés seront réanalysés si éligibles")
 
     # Résumé stratégie
     st.markdown("---")
