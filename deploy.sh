@@ -311,6 +311,10 @@ if [ ! -f "$BOT_DIR/config/.env" ]; then
 # 🌐 BLOCKCHAIN CONFIGURATION
 # ============================================
 # RPC Base Network (RPC principal)
+# IMPORTANT: RPC public Base limité à ~30 req/min → erreurs 429 fréquentes
+# SOLUTION: Configurer dRPC plus bas pour 1000+ req/min
+# Si DRPC_API_KEY rempli, remplacer RPC_URL par:
+# RPC_URL=https://lb.drpc.org/ogrpc?network=base&dkey=VOTRE_CLE_DRPC
 RPC_URL=https://mainnet.base.org
 
 # RPC de backup (utilisés automatiquement si RPC principal échoue)

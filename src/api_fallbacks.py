@@ -278,7 +278,7 @@ class DexScreenerFreeAPI:
             if response.status_code == 200:
                 data = response.json()
 
-                if 'pairs' in data and len(data['pairs']) > 0:
+                if 'pairs' in data and data['pairs'] and len(data['pairs']) > 0:
                     # Prendre le pool avec le plus de liquidité sur Base
                     base_pairs = [p for p in data['pairs'] if p.get('chainId') == chain]
 
