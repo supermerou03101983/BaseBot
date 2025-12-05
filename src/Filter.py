@@ -20,8 +20,9 @@ sys.path.append(str(PROJECT_DIR))
 from dotenv import load_dotenv
 from web3_utils import (
     BaseWeb3Manager, UniswapV3Manager,
-    MarketDataAggregator, BaseScanAPI, CoinGeckoAPI
+    BaseScanAPI, CoinGeckoAPI
 )
+from data_aggregator import DataAggregator
 
 load_dotenv(PROJECT_DIR / 'config' / '.env')
 
@@ -48,10 +49,19 @@ class AdvancedFilter:
             private_key=os.getenv('PRIVATE_KEY')
         )
         self.uniswap = UniswapV3Manager(self.web3_manager)
-        # Market data aggregator (BirdEye + DexScreener + on-chain fallback)
-        birdeye_api_key = os.getenv('BIRDEYE_API_KEY')
-        self.market_data = MarketDataAggregator(birdeye_api_key=birdeye_api_key, web3_manager=self.web3_manager)
-        self.basescan = BaseScanAPI(os.getenv('ETHERSCAN_API_KEY')) # Utilise la clé Etherscan
+
+        # Nouveau Data Aggregator (DexScreener prioritaire + On-chain fallback + BirdEye optionnel)
+        enable_onchain = os.getenv('ENABLE_ONCHAIN_FALLBACK', 'true').lower() == 'true'
+        self.market_data = DataAggregator(
+            w3=self.web3_manager.w3,
+            birdeye_api_key=os.getenv('BIRDEYE_API_KEY'),
+            basescan_api_key=os.getenv('ETHERSCAN_API_KEY'),
+            coingecko_api_key=os.getenv('COINGECKO_API_KEY'),
+            enable_onchain_fallback=enable_onchain
+        )
+
+        # Clients standalone (conservés pour compatibilité si besoin)
+        self.basescan = BaseScanAPI(os.getenv('ETHERSCAN_API_KEY'))
         self.coingecko = CoinGeckoAPI(os.getenv('COINGECKO_API_KEY'))
 
         # Système de blacklist
@@ -709,32 +719,40 @@ class AdvancedFilter:
                 status_prefix = "🔄 RETRY" if is_retry else "🆕 NEW"
                 self.logger.info(f"{status_prefix} - Analyse du token: {token_dict.get('symbol', 'N/A')} ({token_dict['token_address']})")
 
-                # === ENRICHISSEMENT DEXSCREENER ===
-                # Scanner fournit seulement données on-chain (age_hours, symbol, name, decimals)
-                # Filter enrichit avec données market (BirdEye + DexScreener + on-chain fallback)
+                # === ENRICHISSEMENT MULTI-SOURCES ===
+                # Scanner fournit données on-chain de base (age_hours, symbol, name, decimals)
+                # DataAggregator enrichit via DexScreener → On-chain → BirdEye → CoinGecko
                 try:
                     token_address = token_dict['token_address']
-                    market_data = self.market_data.get_enriched_token_data(token_address)
+                    pair_address = token_dict.get('pair_address', None)
+
+                    # Appel au nouvel agrégateur
+                    market_data = self.market_data.get_enriched_token_data(token_address, pair_address)
 
                     if market_data:
-                        # Enrichir token_dict avec données agrégées
-                        token_dict['liquidity'] = market_data.get('liquidity', 0)
+                        # Log des sources utilisées
+                        sources = ', '.join(market_data.get('data_sources', ['unknown']))
+                        self.logger.debug(f"Sources données pour {token_dict.get('symbol', 'N/A')}: {sources}")
+
+                        # Enrichir token_dict avec données agrégées (mapping nouveau format)
+                        token_dict['liquidity'] = market_data.get('liquidity_usd', 0)
                         token_dict['market_cap'] = market_data.get('market_cap', 0)
                         token_dict['volume_24h'] = market_data.get('volume_24h', 0)
                         token_dict['volume_1h'] = market_data.get('volume_1h', 0)
                         token_dict['volume_5min'] = market_data.get('volume_5min', 0)
-                        token_dict['price_change_5m'] = market_data.get('price_change_5m', 0)
+                        token_dict['price_change_5m'] = market_data.get('price_change_5min', 0)
                         token_dict['price_change_1h'] = market_data.get('price_change_1h', 0)
                         token_dict['price_usd'] = market_data.get('price_usd', 0)
                         token_dict['holder_count'] = market_data.get('holder_count', 0)
                         token_dict['owner_percentage'] = market_data.get('owner_percentage', 100.0)
-                        token_dict['buy_tax'] = market_data.get('buy_tax')
-                        token_dict['sell_tax'] = market_data.get('sell_tax')
-                        token_dict['data_source'] = market_data.get('source', 'unknown')
+                        token_dict['pair_address'] = market_data.get('pair_address', token_dict.get('pair_address', ''))
+                        # Note: buy_tax et sell_tax non fournis par DexScreener/OnChain, fallback si BirdEye disponible
+                        token_dict['buy_tax'] = market_data.get('buy_tax', 0)
+                        token_dict['sell_tax'] = market_data.get('sell_tax', 0)
 
-                        self.logger.debug(f"✅ Enrichissement réussi pour {token_dict['symbol']} (source: {token_dict['data_source']})")
+                        self.logger.debug(f"✅ Enrichissement réussi pour {token_dict['symbol']} (sources: {sources})")
                     else:
-                        self.logger.warning(f"⚠️ Aucune donnée market pour {token_address[:8]}... (BirdEye+DexScreener+onchain ont échoué)")
+                        self.logger.warning(f"⚠️ Aucune donnée market pour {token_address[:8]}... (DexScreener+OnChain+BirdEye ont échoué)")
                         # Rejeter si aucune source n'a retourné de données
                         rejection_reason = "❌ REJET: Token non trouvé sur BirdEye/DexScreener/on-chain (trop récent ou non listé)"
                         self.reject_token(token_dict, [rejection_reason], None)
