@@ -475,6 +475,15 @@ LOSING_TOKEN_COOLDOWN_HOURS=24
 ENABLE_RETRY_LOGIC=true
 
 # ============================================
+# 🌐 DATA SOURCES - Agrégation Multi-Sources (Modification #7)
+# ============================================
+# Activer les fallbacks on-chain (true/false)
+# Si true: récupère liquidité/volume/holders directement de la blockchain si APIs échouent
+# Si false: dépend uniquement des APIs externes (DexScreener, BirdEye, CoinGecko)
+# Recommandé: true (fonctionne même si APIs down)
+ENABLE_ONCHAIN_FALLBACK=true
+
+# ============================================
 # 🌐 API SERVER
 # ============================================
 API_ENABLED=true
@@ -908,6 +917,32 @@ for file in "${REQUIRED_FILES[@]}"; do
     fi
 done
 
+# Vérifier les fichiers Modification #7 (agrégateur multi-sources)
+print_step "Vérification des modules Modification #7..."
+MOD7_FILES=(
+    "$BOT_DIR/src/onchain_fetcher.py"
+    "$BOT_DIR/src/api_fallbacks.py"
+    "$BOT_DIR/src/data_aggregator.py"
+)
+
+MOD7_OK=0
+for file in "${MOD7_FILES[@]}"; do
+    if [ -f "$file" ]; then
+        print_success "OK: $(basename $file)"
+        MOD7_OK=$((MOD7_OK + 1))
+    else
+        print_warning "MANQUANT: $(basename $file) (version ancienne du repo)"
+    fi
+done
+
+if [ $MOD7_OK -eq 3 ]; then
+    print_success "Modification #7 complète (agrégateur multi-sources avec fallbacks on-chain)"
+elif [ $MOD7_OK -gt 0 ]; then
+    print_warning "Modification #7 incomplète ($MOD7_OK/3 fichiers)"
+else
+    print_warning "Modification #7 non installée (utilise MarketDataAggregator ancien)"
+fi
+
 # Vérifier les fichiers de documentation critiques (ajoutés avec les derniers fixes)
 print_step "Vérification de la documentation des derniers fixes..."
 CRITICAL_DOCS=(
@@ -930,6 +965,8 @@ if [ $DOCS_FOUND -ge 4 ]; then
     print_success "Documentation des fixes critiques présente ($DOCS_FOUND/6)"
     print_info "Fixes appliqués:"
     print_info "  • Modification #1: Critères assouplies (MIN_VOLUME $3K, MIN_LIQUIDITY $5K)"
+    print_info "  • Modification #6: Système de retry progressif avec délais adaptatifs"
+    print_info "  • Modification #7: Agrégateur multi-sources (DexScreener → On-chain → BirdEye)"
     print_info "  • Filtre volume_1h: Rejette automatiquement les tokens morts (volume_1h=0)"
     print_info "  • Prix réels: Mode PAPER utilise uniquement les prix DexScreener"
 else
